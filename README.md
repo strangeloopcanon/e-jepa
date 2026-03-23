@@ -1,18 +1,100 @@
 # E-JEPA
 
-E-JEPA turns the LeWorldModel idea into a practical world model for structured business data.
+E-JEPA is a JEPA world model for enterprise data.
 
-It can:
+Instead of learning from pixels, it learns from structured business state and the decisions taken in that state.
+
+## What It Is
+
+E-JEPA is for settings where the world already looks like tables, counts, statuses, events, and actions.
+
+Examples:
+
+- business time series
+- enterprise operations data
+- VEI workflow runs
+- VEI playable missions
+- repeated enterprise context snapshots from systems like Slack, Jira, Google, and Okta
+
+The model's job is simple:
+
+- read the recent state
+- read the recent actions
+- predict the next state in a compact latent space
+
+It does not currently predict the next action. Actions are inputs that help it predict what happens next.
+
+## How It Relates To LeWorldModel
+
+This is not a direct modification of [lucas-maes/le-wm](https://github.com/lucas-maes/le-wm).
+
+LeWorldModel is the pixel version. Its own README says that repository is built on top of `stable-worldmodel` and `stable-pretraining`, with that repo focused on the model and objective. E-JEPA keeps the same high-level JEPA recipe, but reworks the front end, data format, and training interface for enterprise state and decision data instead of image trajectories.
+
+In short:
+
+- LeWorldModel: pixels in, latent future prediction out
+- E-JEPA: structured enterprise state and action in, latent future prediction out
+
+## What Changed
+
+Compared with the pixel setting, E-JEPA changes four main things:
+
+- the image encoder is replaced with a structured-state encoder for numeric, categorical, and missing-value features
+- actions are represented explicitly as business controls or VEI tool choices
+- raw business and VEI data are converted into one common step format: `steps.parquet` plus `schema.json`
+- evaluation is geared toward enterprise use cases: next-state prediction, surprise scoring, and simple readouts of business quantities
+
+## How Training Works
+
+Training is intentionally simple.
+
+1. Prepare sequences into a common step dataset.
+2. Normalize numeric fields on the training split only.
+3. Embed categorical fields and action fields.
+4. Encode each step into a compact latent state.
+5. Feed the last 16 latent states and aligned actions into a causal predictor.
+6. Train the predictor to match the next latent state.
+7. Add the same Gaussian regularizer idea used in LeWorldModel to keep the latent space well-behaved.
+
+So the core learning target is:
+
+- current state plus action history -> next latent state
+
+After training, you can use that predictor for:
+
+- next-state forecasting
+- surprise detection from prediction error
+- lightweight probes for business quantities
+- future planning work, using candidate action scoring
+
+## Does Training Work?
+
+Yes, as a first working version.
+
+- the full project checks and tests pass
+- live VEI workflow and playable exports both worked against the updated VEI code
+- on synthetic business data, the model beat a simple persistence baseline
+- on an action-driven synthetic benchmark, including actions improved next-state prediction over leaving actions out
+
+What it is good for today:
+
+- learning compact state dynamics over enterprise data
+- using actions to improve next-state prediction
+- flagging unusual transitions
+
+What it is not yet:
+
+- a finished planner
+- a next-action generator
+- a large-scale real-business benchmark result
+
+## What It Can Do
 
 - prepare wide step datasets from generic business time series
 - prepare the same dataset shape from VEI workflow runs and playable runs
 - prepare the same dataset shape from repeated VEI context captures
 - train a compact JEPA that predicts the next latent state from the current state and action
 - score surprise from prediction error and fit lightweight probes after training
-
-## Why it exists
-
-The original LeWorldModel paper learns from pixels. This repo keeps the same core idea, but swaps the image encoder for a structured-state encoder so we can use it on real business sequences and VEI enterprise simulations.
 
 ## The dataset format
 

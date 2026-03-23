@@ -3,6 +3,7 @@
 .dolt/
 *.db
 .beads-credential-key
+.beads/
 
 # Python environment and caches
 .venv/

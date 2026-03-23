@@ -1,0 +1,65 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "structured-jepa"
+version = "0.1.0"
+description = "Structured-state JEPA for business time series and VEI data."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "numpy>=1.26",
+  "pandas>=2.2",
+  "pyarrow>=15.0",
+  "pydantic>=2.8",
+  "torch>=2.2",
+  "typer>=0.12",
+]
+
+[project.optional-dependencies]
+dev = [
+  "bandit>=1.7",
+  "detect-secrets>=1.5",
+  "mypy>=1.10",
+  "pandas-stubs>=2.2",
+  "pip-audit>=2.7",
+  "pytest>=8.3",
+  "pytest-cov>=5.0",
+  "ruff>=0.6",
+]
+
+[project.scripts]
+structured-jepa = "structured_jepa.cli:app"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "--cov=structured_jepa --cov-report=term-missing --cov-fail-under=80"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.mypy]
+python_version = "3.11"
+warn_unused_configs = true
+disallow_untyped_defs = true
+no_implicit_optional = true
+check_untyped_defs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+exclude = ["tests/fixtures/"]
+
+[[tool.mypy.overrides]]
+module = ["vei.*"]
+ignore_missing_imports = true

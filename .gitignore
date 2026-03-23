@@ -3,3 +3,14 @@
 .dolt/
 *.db
 .beads-credential-key
+
+# Python environment and caches
+.venv/
+__pycache__/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Test and coverage output
+.coverage
+htmlcov/

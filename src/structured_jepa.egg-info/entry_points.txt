@@ -1,0 +1,2 @@
+[console_scripts]
+structured-jepa = structured_jepa.cli:app

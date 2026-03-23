@@ -3,9 +3,9 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "structured-jepa"
+name = "e-jepa"
 version = "0.1.0"
-description = "Structured-state JEPA for business time series and VEI data."
+description = "Enterprise JEPA for structured business state, decisions, and VEI data."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -30,6 +30,7 @@ dev = [
 ]
 
 [project.scripts]
+e-jepa = "structured_jepa.cli:app"
 structured-jepa = "structured_jepa.cli:app"
 
 [tool.setuptools]

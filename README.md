@@ -1,6 +1,6 @@
-# Structured-State JEPA
+# E-JEPA
 
-This project turns the LeWorldModel idea into a practical world model for structured business data.
+E-JEPA turns the LeWorldModel idea into a practical world model for structured business data.
 
 It can:
 
@@ -46,13 +46,13 @@ Feature columns are prefixed so they stay easy to scan:
 ```bash
 make setup
 
-uv run structured-jepa prepare-timeseries \
+uv run e-jepa prepare-timeseries \
   --input /path/to/business.csv \
   --output ./out/business_dataset \
   --entity-column account_id \
   --timestamp-column event_time
 
-uv run structured-jepa train \
+uv run e-jepa train \
   --dataset ./out/business_dataset \
   --output ./out/checkpoints/business_model
 ```
@@ -62,7 +62,7 @@ uv run structured-jepa train \
 Prepare data from VEI runs:
 
 ```bash
-uv run structured-jepa prepare-vei-runs \
+uv run e-jepa prepare-vei-runs \
   --workspace-root /path/to/vei/workspace \
   --output ./out/vei_runs_dataset
 ```
@@ -70,7 +70,7 @@ uv run structured-jepa prepare-vei-runs \
 Prepare data from VEI context snapshots:
 
 ```bash
-uv run structured-jepa prepare-vei-context \
+uv run e-jepa prepare-vei-context \
   --snapshot-glob "/path/to/context/*.json" \
   --output ./out/vei_context_dataset
 ```

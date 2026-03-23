@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,6 +18,8 @@ from .schema import (
     dataset_paths,
 )
 from .utils import ensure_directory, json_dump
+
+logger = logging.getLogger(__name__)
 
 REQUIRED_COLUMNS = [
     "episode_id",
@@ -120,6 +123,15 @@ def finalize_processed_dataset(
     processed.to_parquet(steps_path, index=False)
     json_dump(schema_path, schema.model_dump(mode="json"))
 
+    logger.info(
+        "dataset_written",
+        extra={
+            "kind": dataset_kind,
+            "rows": len(processed),
+            "episodes": processed["episode_id"].nunique(),
+            "path": str(dataset_root),
+        },
+    )
     return PreparedDataset(frame=processed, schema=schema, root=dataset_root)
 
 
@@ -127,6 +139,10 @@ def load_processed_dataset(root: str | Path) -> PreparedDataset:
     steps_path, schema_path = dataset_paths(root)
     frame = pd.read_parquet(steps_path)
     schema = DatasetSchema.model_validate_json(schema_path.read_text(encoding="utf-8"))
+    logger.info(
+        "dataset_loaded",
+        extra={"rows": len(frame), "path": str(steps_path.parent)},
+    )
     return PreparedDataset(frame=frame, schema=schema, root=steps_path.parent)
 
 

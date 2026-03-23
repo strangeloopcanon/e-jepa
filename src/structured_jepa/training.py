@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Sized
 from pathlib import Path
 from typing import cast
@@ -21,6 +22,8 @@ from .schema import (
 )
 from .storage import PreparedDataset, WindowDataset, collate_step_batches, load_processed_dataset
 from .utils import ensure_directory, set_random_seed
+
+logger = logging.getLogger(__name__)
 
 
 def build_model(schema: DatasetSchema, config: ModelConfig) -> StructuredStateJEPA:
@@ -47,6 +50,19 @@ def train_model(
     train_args = train_config or TrainConfig()
     set_random_seed(train_args.seed)
 
+    logger.info(
+        "training_start",
+        extra={
+            "epochs": train_args.epochs,
+            "batch_size": train_args.batch_size,
+            "lr": train_args.lr,
+            "device": train_args.device,
+            "d_state": config.d_state,
+            "rows": prepared.schema.row_count,
+            "episodes": prepared.schema.episode_count,
+        },
+    )
+
     model = build_model(prepared.schema, config).to(train_args.device)
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -62,9 +78,15 @@ def train_model(
     )
 
     history = TrainHistory()
-    for _ in range(train_args.epochs):
-        history.train_losses.append(_run_epoch(model, train_loader, optimizer, train_args.device))
-        history.val_losses.append(_run_epoch(model, val_loader, None, train_args.device))
+    for epoch in range(train_args.epochs):
+        train_loss = _run_epoch(model, train_loader, optimizer, train_args.device)
+        val_loss = _run_epoch(model, val_loader, None, train_args.device)
+        history.train_losses.append(train_loss)
+        history.val_losses.append(val_loss)
+        logger.info(
+            "epoch_complete",
+            extra={"epoch": epoch, "train_loss": train_loss, "val_loss": val_loss},
+        )
 
     output_root = ensure_directory(output_dir)
     model_path = output_root / "model.pt"
@@ -80,6 +102,14 @@ def train_model(
     summary_path.write_text(
         json.dumps({"history": history.model_dump(mode="json")}, indent=2),
         encoding="utf-8",
+    )
+    logger.info(
+        "training_complete",
+        extra={
+            "final_train_loss": history.train_losses[-1],
+            "final_val_loss": history.val_losses[-1],
+            "model_path": str(model_path),
+        },
     )
     return TrainingArtifacts(
         model_path=str(model_path),
@@ -122,7 +152,7 @@ def evaluate_model(
         for batch in test_loader:
             moved = batch.to(device)
             forward_pass = model.forward(moved)
-            surprises.append(model.surprise_score(moved).cpu())
+            surprises.append(model.surprise_score(moved, forward_pass=forward_pass).cpu())
             latent_errors.append(
                 (forward_pass.predicted_latents - forward_pass.target_latents)
                 .pow(2)
@@ -135,11 +165,20 @@ def evaluate_model(
                 .mean(dim=-1)
                 .cpu()
             )
-    return EvaluationResult(
+    result = EvaluationResult(
         mean_surprise=float(torch.cat(surprises).mean().item()),
         latent_mse=float(torch.cat(latent_errors).mean().item()),
         naive_observation_mse=float(torch.cat(naive_errors).mean().item()),
     )
+    logger.info(
+        "evaluation_complete",
+        extra={
+            "mean_surprise": result.mean_surprise,
+            "latent_mse": result.latent_mse,
+            "naive_observation_mse": result.naive_observation_mse,
+        },
+    )
+    return result
 
 
 def fit_linear_probe(
@@ -170,6 +209,10 @@ def fit_linear_probe(
     baseline = torch.full_like(eval_targets, float(train_targets.mean().item()))
     mse = float(torch.mean((predictions - eval_targets) ** 2).item())
     baseline_mse = float(torch.mean((baseline - eval_targets) ** 2).item())
+    logger.info(
+        "probe_complete",
+        extra={"target": target_column, "mse": mse, "baseline_mse": baseline_mse},
+    )
     return LinearProbeResult(
         target_column=target_column,
         mse=mse,
@@ -213,6 +256,10 @@ def fit_summary_decoder(
             latents.append(encoded.cpu())
             targets.append(moved.observation_numeric[:, -1, column_indexes].cpu())
     weights = _fit_least_squares(torch.cat(latents), torch.cat(targets))
+    logger.info(
+        "decoder_fit_complete",
+        extra={"columns": selected, "sample_count": torch.cat(latents).size(0)},
+    )
     return {
         "columns": selected,
         "weights": weights.tolist(),

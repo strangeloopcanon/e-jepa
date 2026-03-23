@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections import Counter
 from pathlib import Path
 from typing import Any
@@ -10,6 +11,8 @@ import pandas as pd
 from .storage import PreparedDataset, finalize_processed_dataset
 from .utils import make_split_map, normalize_token
 
+logger = logging.getLogger(__name__)
+
 
 def prepare_vei_runs_dataset(
     *,
@@ -17,6 +20,8 @@ def prepare_vei_runs_dataset(
     output_dir: str | Path,
     run_ids: list[str] | None = None,
     seed: int = 7,
+    train_fraction: float = 0.7,
+    val_fraction: float = 0.15,
 ) -> PreparedDataset:
     workspace = Path(workspace_root).expanduser().resolve()
     runs_root = workspace / "runs"
@@ -24,6 +29,10 @@ def prepare_vei_runs_dataset(
         raise ValueError(f"VEI runs directory not found: {runs_root}")
 
     selected_run_ids = run_ids or sorted(path.name for path in runs_root.iterdir() if path.is_dir())
+    logger.info(
+        "vei_runs_preparation_start",
+        extra={"workspace": str(workspace), "run_count": len(selected_run_ids)},
+    )
     rows: list[dict[str, object]] = []
     metadata_columns = [
         "meta__runner",
@@ -100,7 +109,12 @@ def prepare_vei_runs_dataset(
         raise ValueError("no VEI runs produced usable snapshot rows")
 
     steps = pd.DataFrame(rows)
-    split_map = make_split_map(steps["episode_id"].tolist(), seed=seed)
+    split_map = make_split_map(
+        steps["episode_id"].tolist(),
+        seed=seed,
+        train_fraction=train_fraction,
+        val_fraction=val_fraction,
+    )
     steps["split"] = steps["episode_id"].map(split_map)
 
     observation_numeric_columns = [
@@ -130,6 +144,10 @@ def prepare_vei_runs_dataset(
         "action_graph_action",
     ]
 
+    logger.info(
+        "vei_runs_preparation_complete",
+        extra={"rows": len(steps), "episodes": steps["episode_id"].nunique()},
+    )
     return finalize_processed_dataset(
         raw_steps=steps,
         output_dir=output_dir,

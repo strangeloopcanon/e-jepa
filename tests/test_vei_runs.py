@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -12,11 +13,13 @@ from structured_jepa.vei_runs import prepare_vei_runs_dataset
 
 
 def _enable_vei_imports() -> bool:
-    repo_root = Path("/Users/rohit/Documents/Workspace/Coding/digital-enterprise-twin")
-    if repo_root.exists():
-        repo_path = str(repo_root)
-        if repo_path not in sys.path:
-            sys.path.insert(0, repo_path)
+    repo_root_env = os.environ.get("VEI_REPO_ROOT")
+    if repo_root_env:
+        repo_root = Path(repo_root_env)
+        if repo_root.exists():
+            repo_path = str(repo_root)
+            if repo_path not in sys.path:
+                sys.path.insert(0, repo_path)
     return importlib.util.find_spec("vei") is not None
 
 

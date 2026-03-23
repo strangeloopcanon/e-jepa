@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import pandas as pd
 
 from .storage import PreparedDataset, finalize_processed_dataset
 from .utils import make_split_map, parse_timestamp_series, read_table
+
+logger = logging.getLogger(__name__)
 
 
 def prepare_timeseries_dataset(
@@ -19,7 +22,13 @@ def prepare_timeseries_dataset(
     action_categorical_columns: list[str] | None = None,
     auxiliary_numeric_target_columns: list[str] | None = None,
     seed: int = 7,
+    train_fraction: float = 0.7,
+    val_fraction: float = 0.15,
 ) -> PreparedDataset:
+    logger.info(
+        "timeseries_preparation_start",
+        extra={"input_path": str(input_path), "entity_column": entity_column},
+    )
     frame = read_table(input_path)
     if entity_column not in frame.columns:
         raise ValueError(f"entity column not found: {entity_column}")
@@ -53,7 +62,12 @@ def prepare_timeseries_dataset(
     steps["step_idx"] = steps.groupby("episode_id").cumcount()
     steps["delta_t_s"] = steps.groupby("episode_id")["timestamp"].transform(_iso_delta_seconds)
     steps["done"] = steps.groupby("episode_id")["step_idx"].transform("max") == steps["step_idx"]
-    split_map = make_split_map(steps["episode_id"].tolist(), seed=seed)
+    split_map = make_split_map(
+        steps["episode_id"].tolist(),
+        seed=seed,
+        train_fraction=train_fraction,
+        val_fraction=val_fraction,
+    )
     steps["split"] = steps["episode_id"].map(split_map)
     steps["action_name"] = steps.apply(
         lambda row: _action_name_for_row(row, action_numeric, action_categorical),
@@ -66,6 +80,14 @@ def prepare_timeseries_dataset(
         if column not in {"episode_id", "timestamp"}
     ]
 
+    logger.info(
+        "timeseries_preparation_complete",
+        extra={
+            "rows": len(steps),
+            "episodes": steps["episode_id"].nunique(),
+            "observation_numeric_count": len(observation_numeric),
+        },
+    )
     return finalize_processed_dataset(
         raw_steps=steps,
         output_dir=output_dir,

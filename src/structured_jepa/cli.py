@@ -41,6 +41,8 @@ def prepare_timeseries_command(
         "", "--auxiliary-numeric-targets", help="Comma-separated auxiliary numeric target columns"
     ),
     seed: int = typer.Option(7, "--seed", help="Split seed"),
+    train_fraction: float = typer.Option(0.7, "--train-fraction", help="Train split fraction"),
+    val_fraction: float = typer.Option(0.15, "--val-fraction", help="Validation split fraction"),
 ) -> None:
     prepared = prepare_timeseries_dataset(
         input_path=input_path,
@@ -52,6 +54,8 @@ def prepare_timeseries_command(
         action_categorical_columns=_split_csv_values(action_categorical_columns),
         auxiliary_numeric_target_columns=_split_csv_values(auxiliary_numeric_targets),
         seed=seed,
+        train_fraction=train_fraction,
+        val_fraction=val_fraction,
     )
     typer.echo(f"Wrote {prepared.schema.row_count} rows to {prepared.root}")
 
@@ -62,12 +66,16 @@ def prepare_vei_runs_command(
     output_dir: str = typer.Option(..., "--output", help="Prepared dataset directory"),
     run_id: list[str] = RUN_ID_OPTION,
     seed: int = typer.Option(7, "--seed", help="Split seed"),
+    train_fraction: float = typer.Option(0.7, "--train-fraction", help="Train split fraction"),
+    val_fraction: float = typer.Option(0.15, "--val-fraction", help="Validation split fraction"),
 ) -> None:
     prepared = prepare_vei_runs_dataset(
         workspace_root=workspace_root,
         output_dir=output_dir,
         run_ids=run_id or None,
         seed=seed,
+        train_fraction=train_fraction,
+        val_fraction=val_fraction,
     )
     typer.echo(f"Wrote {prepared.schema.row_count} VEI run rows to {prepared.root}")
 
@@ -80,6 +88,8 @@ def prepare_vei_context_command(
     output_dir: str = typer.Option(..., "--output", help="Prepared dataset directory"),
     diff_glob: str = typer.Option("", "--diff-glob", help="Optional glob for context diff files"),
     seed: int = typer.Option(7, "--seed", help="Split seed"),
+    train_fraction: float = typer.Option(0.7, "--train-fraction", help="Train split fraction"),
+    val_fraction: float = typer.Option(0.15, "--val-fraction", help="Validation split fraction"),
 ) -> None:
     snapshot_paths = sorted(glob.glob(snapshot_glob))
     if not snapshot_paths:
@@ -90,6 +100,8 @@ def prepare_vei_context_command(
         diff_paths=diff_paths,
         output_dir=output_dir,
         seed=seed,
+        train_fraction=train_fraction,
+        val_fraction=val_fraction,
     )
     typer.echo(f"Wrote {prepared.schema.row_count} VEI context rows to {prepared.root}")
 

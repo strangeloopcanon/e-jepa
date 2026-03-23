@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections import Counter, defaultdict
 from collections.abc import Sequence
 from pathlib import Path
@@ -11,6 +12,8 @@ import pandas as pd
 from .storage import PreparedDataset, finalize_processed_dataset
 from .utils import make_split_map, parse_timestamp_series
 
+logger = logging.getLogger(__name__)
+
 
 def prepare_vei_context_dataset(
     *,
@@ -18,7 +21,13 @@ def prepare_vei_context_dataset(
     output_dir: str | Path,
     diff_paths: Sequence[str | Path] | None = None,
     seed: int = 7,
+    train_fraction: float = 0.7,
+    val_fraction: float = 0.15,
 ) -> PreparedDataset:
+    logger.info(
+        "vei_context_preparation_start",
+        extra={"snapshot_count": len(snapshot_paths)},
+    )
     snapshots = [_load_json(path) for path in snapshot_paths]
     if not snapshots:
         raise ValueError("at least one context snapshot is required")
@@ -180,7 +189,12 @@ def prepare_vei_context_dataset(
             axis=1,
         )
 
-    split_map = make_split_map(steps["episode_id"].tolist(), seed=seed)
+    split_map = make_split_map(
+        steps["episode_id"].tolist(),
+        seed=seed,
+        train_fraction=train_fraction,
+        val_fraction=val_fraction,
+    )
     steps["split"] = steps["episode_id"].map(split_map)
 
     observation_numeric_columns = [
@@ -220,6 +234,10 @@ def prepare_vei_context_dataset(
         *[column for column in steps.columns if column.startswith("diff_changed__")],
     ]
 
+    logger.info(
+        "vei_context_preparation_complete",
+        extra={"rows": len(steps), "episodes": steps["episode_id"].nunique()},
+    )
     return finalize_processed_dataset(
         raw_steps=steps,
         output_dir=output_dir,

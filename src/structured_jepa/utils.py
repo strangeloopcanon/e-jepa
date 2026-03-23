@@ -33,19 +33,29 @@ def parse_timestamp_series(values: pd.Series) -> pd.Series:
     return parsed
 
 
-def make_split_map(episode_ids: Iterable[str], seed: int) -> dict[str, str]:
+def make_split_map(
+    episode_ids: Iterable[str],
+    seed: int,
+    *,
+    train_fraction: float = 0.7,
+    val_fraction: float = 0.15,
+) -> dict[str, str]:
+    if train_fraction <= 0 or val_fraction <= 0:
+        raise ValueError("train_fraction and val_fraction must be positive")
+    if train_fraction + val_fraction >= 1.0:
+        raise ValueError("train_fraction + val_fraction must be less than 1.0")
+
     unique_ids = sorted({str(value) for value in episode_ids})
     if len(unique_ids) <= 1:
         return {episode_id: "train" for episode_id in unique_ids}
 
-    # Stable split assignment for experiments.
     rng = random.Random(seed)  # nosec B311
     shuffled = list(unique_ids)
     rng.shuffle(shuffled)
 
-    train_cut = max(1, math.floor(len(shuffled) * 0.7))
+    train_cut = max(1, math.floor(len(shuffled) * train_fraction))
     val_cut = (
-        max(train_cut + 1, math.floor(len(shuffled) * 0.85))
+        max(train_cut + 1, math.floor(len(shuffled) * (train_fraction + val_fraction)))
         if len(shuffled) >= 3
         else len(shuffled)
     )

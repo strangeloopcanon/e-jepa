@@ -302,8 +302,11 @@ class StructuredStateJEPA(nn.Module):
         )
 
     @torch.no_grad()
-    def surprise_score(self, batch: StepBatch) -> torch.Tensor:
-        forward_pass = self.forward(batch)
+    def surprise_score(
+        self, batch: StepBatch, forward_pass: ForwardPass | None = None
+    ) -> torch.Tensor:
+        if forward_pass is None:
+            forward_pass = self.forward(batch)
         return (forward_pass.predicted_latents - forward_pass.target_latents).pow(2).mean(dim=-1)
 
     @torch.no_grad()

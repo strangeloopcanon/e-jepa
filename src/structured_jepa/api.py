@@ -2,7 +2,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .schema import EvaluationResult, LinearProbeResult, ModelConfig, TrainConfig, TrainingArtifacts
+from .proof import benchmark_timeseries, benchmark_vei_demo, write_brief
+from .schema import (
+    EvaluationResult,
+    LinearProbeResult,
+    ModelConfig,
+    TrainConfig,
+    TrainingArtifacts,
+)
 from .storage import PreparedDataset, load_processed_dataset
 from .timeseries import prepare_timeseries_dataset
 from .training import evaluate_model, fit_linear_probe, fit_summary_decoder, train_model
@@ -16,6 +23,8 @@ __all__ = [
     "PreparedDataset",
     "TrainConfig",
     "TrainingArtifacts",
+    "benchmark_timeseries",
+    "benchmark_vei_demo",
     "evaluate_model",
     "fit_linear_probe",
     "fit_summary_decoder",
@@ -24,6 +33,7 @@ __all__ = [
     "prepare_vei_context_dataset",
     "prepare_vei_runs_dataset",
     "train_model",
+    "write_brief",
 ]
 
 

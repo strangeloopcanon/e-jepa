@@ -164,6 +164,34 @@ uv run e-jepa prepare-vei-context \
   --output ./out/vei_context_dataset
 ```
 
+## Proof And Demo Commands
+
+Write a benchmark report that compares the flat model, the tokenized model, the flat model with actions removed, and a persistence baseline:
+
+```bash
+uv run e-jepa benchmark-timeseries \
+  --dataset ./out/business_dataset \
+  --output ./out/benchmark_report
+```
+
+Write a short VEI demo bundle from a prepared VEI dataset and a trained checkpoint:
+
+```bash
+uv run e-jepa benchmark-vei-demo \
+  --dataset ./out/vei_runs_dataset \
+  --checkpoint ./out/checkpoints/business_model/model.pt \
+  --output ./out/vei_demo
+```
+
+Generate a short briefing document from the benchmark outputs:
+
+```bash
+uv run e-jepa write-brief \
+  --benchmark-dir ./out/benchmark_report \
+  --vei-demo-dir ./out/vei_demo \
+  --output ./out/show_yann.md
+```
+
 ## Verification
 
 ```bash

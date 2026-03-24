@@ -168,24 +168,7 @@ class WindowDataset(Dataset[StepBatch]):
     def __getitem__(self, index: int) -> StepBatch:
         window = self._windows[index]
         rows = self.frame.iloc[window]
-        return StepBatch(
-            observation_numeric=_frame_to_tensor(rows, self.schema.observation_numeric_columns),
-            observation_masks=_frame_to_tensor(rows, self.schema.observation_mask_columns),
-            observation_categorical=_frame_to_categorical_tensor(
-                rows,
-                self.schema.observation_categorical_columns,
-                self._observation_cat_maps,
-            ),
-            action_numeric=_frame_to_tensor(rows, self.schema.action_numeric_columns),
-            action_masks=_frame_to_tensor(rows, self.schema.action_mask_columns),
-            action_categorical=_frame_to_categorical_tensor(
-                rows,
-                self.schema.action_categorical_columns,
-                self._action_cat_maps,
-            ),
-            auxiliary_numeric_targets=_frame_to_tensor(rows, self.schema.auxiliary_numeric_targets),
-            valid_mask=torch.ones(len(rows), dtype=torch.float32),
-        )
+        return rows_to_step_batch(rows, self.schema)
 
     def _build_windows(self) -> list[list[int]]:
         windows: list[list[int]] = []
@@ -210,6 +193,29 @@ def collate_step_batches(items: Iterable[StepBatch]) -> StepBatch:
         action_categorical=torch.stack([item.action_categorical for item in batches]),
         auxiliary_numeric_targets=torch.stack([item.auxiliary_numeric_targets for item in batches]),
         valid_mask=torch.stack([item.valid_mask for item in batches]),
+    )
+
+
+def rows_to_step_batch(rows: pd.DataFrame, schema: DatasetSchema) -> StepBatch:
+    observation_cat_maps = [spec.to_id_map() for spec in schema.observation_categorical]
+    action_cat_maps = [spec.to_id_map() for spec in schema.action_categorical]
+    return StepBatch(
+        observation_numeric=_frame_to_tensor(rows, schema.observation_numeric_columns),
+        observation_masks=_frame_to_tensor(rows, schema.observation_mask_columns),
+        observation_categorical=_frame_to_categorical_tensor(
+            rows,
+            schema.observation_categorical_columns,
+            observation_cat_maps,
+        ),
+        action_numeric=_frame_to_tensor(rows, schema.action_numeric_columns),
+        action_masks=_frame_to_tensor(rows, schema.action_mask_columns),
+        action_categorical=_frame_to_categorical_tensor(
+            rows,
+            schema.action_categorical_columns,
+            action_cat_maps,
+        ),
+        auxiliary_numeric_targets=_frame_to_tensor(rows, schema.auxiliary_numeric_targets),
+        valid_mask=torch.ones(len(rows), dtype=torch.float32),
     )
 
 

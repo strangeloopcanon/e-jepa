@@ -10,6 +10,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from .model import StructuredStateJEPA
+from .readouts import apply_linear_readout, fit_least_squares
 from .schema import (
     DatasetSchema,
     EvaluationResult,
@@ -206,8 +207,8 @@ def fit_linear_probe(
     train_latents, train_targets = _collect_probe_data(model, train_loader, target_index, device)
     eval_latents, eval_targets = _collect_probe_data(model, eval_loader, target_index, device)
 
-    weights = _fit_least_squares(train_latents, train_targets)
-    predictions = _apply_linear_readout(eval_latents, weights)
+    weights = fit_least_squares(train_latents, train_targets)
+    predictions = apply_linear_readout(eval_latents, weights)
     baseline = torch.full_like(eval_targets, float(train_targets.mean().item()))
     mse = float(torch.mean((predictions - eval_targets) ** 2).item())
     baseline_mse = float(torch.mean((baseline - eval_targets) ** 2).item())
@@ -257,7 +258,7 @@ def fit_summary_decoder(
             encoded = model.encode_steps(moved)[:, -1]
             latents.append(encoded.cpu())
             targets.append(moved.observation_numeric[:, -1, column_indexes].cpu())
-    weights = _fit_least_squares(torch.cat(latents), torch.cat(targets))
+    weights = fit_least_squares(torch.cat(latents), torch.cat(targets))
     logger.info(
         "decoder_fit_complete",
         extra={"columns": selected, "sample_count": torch.cat(latents).size(0)},
@@ -316,17 +317,3 @@ def _collect_probe_data(
             latents.append(model.encode_steps(moved)[:, -1].cpu())
             targets.append(moved.auxiliary_numeric_targets[:, -1, target_index].cpu())
     return torch.cat(latents), torch.cat(targets)
-
-
-def _fit_least_squares(features: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
-    design = torch.cat([features, torch.ones((features.size(0), 1))], dim=1)
-    target_matrix = targets.unsqueeze(-1) if targets.ndim == 1 else targets
-    result = torch.linalg.lstsq(design, target_matrix)
-    if targets.ndim == 1:
-        return result.solution.squeeze(-1)
-    return result.solution
-
-
-def _apply_linear_readout(features: torch.Tensor, weights: torch.Tensor) -> torch.Tensor:
-    design = torch.cat([features, torch.ones((features.size(0), 1))], dim=1)
-    return design @ weights

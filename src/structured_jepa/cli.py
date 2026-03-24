@@ -7,6 +7,8 @@ from typing import Literal, cast
 import typer
 
 from .api import (
+    benchmark_timeseries,
+    benchmark_vei_demo,
     evaluate_model,
     fit_linear_probe,
     fit_summary_decoder,
@@ -14,6 +16,7 @@ from .api import (
     prepare_vei_context_dataset,
     prepare_vei_runs_dataset,
     train_model,
+    write_brief,
 )
 from .schema import ModelConfig, TrainConfig
 
@@ -184,6 +187,66 @@ def decode_summary_command(
         device=device,
     )
     typer.echo(json.dumps(result, indent=2))
+
+
+@app.command("benchmark-timeseries")
+def benchmark_timeseries_command(
+    dataset_root: str = typer.Option(..., "--dataset", help="Prepared timeseries dataset"),
+    output_dir: str = typer.Option(..., "--output", help="Benchmark report directory"),
+    epochs: int = typer.Option(8, "--epochs", help="Epoch count"),
+    batch_size: int = typer.Option(16, "--batch-size", help="Batch size"),
+    lr: float = typer.Option(1e-3, "--lr", help="Learning rate"),
+    device: str = typer.Option("cpu", "--device", help="Training device"),
+) -> None:
+    output_root = benchmark_timeseries(
+        dataset_root=dataset_root,
+        output_dir=output_dir,
+        train_config=TrainConfig(
+            epochs=epochs,
+            batch_size=batch_size,
+            lr=lr,
+            device=device,
+        ),
+    )
+    typer.echo(f"Benchmark report written to {output_root}")
+
+
+@app.command("benchmark-vei-demo")
+def benchmark_vei_demo_command(
+    dataset_root: str = typer.Option(..., "--dataset", help="Prepared VEI dataset"),
+    checkpoint_path: str = typer.Option(..., "--checkpoint", help="Saved model checkpoint"),
+    output_dir: str = typer.Option(..., "--output", help="Demo report directory"),
+    episode_id: str = typer.Option("", "--episode-id", help="Optional VEI episode id"),
+    max_steps: int = typer.Option(5, "--max-steps", help="Number of steps to summarize"),
+    device: str = typer.Option("cpu", "--device", help="Inference device"),
+) -> None:
+    output_root = benchmark_vei_demo(
+        dataset_root=dataset_root,
+        checkpoint_path=checkpoint_path,
+        output_dir=output_dir,
+        episode_id=episode_id or None,
+        max_steps=max_steps,
+        device=device,
+    )
+    typer.echo(f"VEI demo written to {output_root}")
+
+
+@app.command("write-brief")
+def write_brief_command(
+    benchmark_dir: str = typer.Option(..., "--benchmark-dir", help="Benchmark report directory"),
+    output_path: str = typer.Option(..., "--output", help="Markdown brief output path"),
+    vei_demo_dir: str = typer.Option(
+        "",
+        "--vei-demo-dir",
+        help="Optional VEI demo report directory",
+    ),
+) -> None:
+    output = write_brief(
+        benchmark_dir=benchmark_dir,
+        output_path=output_path,
+        vei_demo_dir=vei_demo_dir or None,
+    )
+    typer.echo(f"Brief written to {output}")
 
 
 def _split_csv_values(raw: str) -> list[str]:

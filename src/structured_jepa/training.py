@@ -46,7 +46,8 @@ def train_model(
     train_config: TrainConfig | None = None,
 ) -> TrainingArtifacts:
     prepared = load_processed_dataset(dataset_root)
-    config = model_config or ModelConfig(context_length=prepared.schema.context_length)
+    config = model_config or ModelConfig()
+    config = config.model_copy(update={"context_length": prepared.schema.context_length})
     train_args = train_config or TrainConfig()
     set_random_seed(train_args.seed)
 
@@ -57,6 +58,7 @@ def train_model(
             "batch_size": train_args.batch_size,
             "lr": train_args.lr,
             "device": train_args.device,
+            "encoder_type": config.encoder_type,
             "d_state": config.d_state,
             "rows": prepared.schema.row_count,
             "episodes": prepared.schema.episode_count,

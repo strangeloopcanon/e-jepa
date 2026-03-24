@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import glob
 import json
+from typing import Literal, cast
 
 import typer
 
@@ -114,11 +115,21 @@ def train_command(
     batch_size: int = typer.Option(16, "--batch-size", help="Batch size"),
     lr: float = typer.Option(1e-3, "--lr", help="Learning rate"),
     device: str = typer.Option("cpu", "--device", help="Training device"),
+    encoder: str = typer.Option(
+        "flat",
+        "--encoder",
+        help="Step encoder: flat or tokenized",
+    ),
 ) -> None:
+    normalized_encoder = encoder.strip().lower()
+    if normalized_encoder not in {"flat", "tokenized"}:
+        raise typer.BadParameter("encoder must be one of: flat, tokenized")
     artifacts = train_model(
         dataset_root=dataset_root,
         output_dir=output_dir,
-        model_config=ModelConfig(),
+        model_config=ModelConfig(
+            encoder_type=cast(Literal["flat", "tokenized"], normalized_encoder)
+        ),
         train_config=TrainConfig(
             epochs=epochs,
             batch_size=batch_size,

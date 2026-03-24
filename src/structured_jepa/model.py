@@ -51,7 +51,7 @@ class MLPBlock(nn.Module):
         return self.net(values)
 
 
-class StructuredStateEncoder(nn.Module):
+class FlatStateEncoder(nn.Module):
     def __init__(
         self,
         *,
@@ -106,8 +106,7 @@ class StructuredStateEncoder(nn.Module):
             categorical_input = torch.cat(embeddings, dim=-1)
             parts.append(self.categorical_projection(categorical_input))
         if not parts:
-            shape = observation_numeric.shape[:-1] + (self.empty_token.numel(),)
-            return self.empty_token.view(1, 1, -1).expand(shape)
+            return self._expand_default_token(observation_numeric, self.empty_token)
         if len(parts) == 1:
             return parts[0]
         output_projection = self.output_projection
@@ -115,8 +114,13 @@ class StructuredStateEncoder(nn.Module):
             return parts[0]
         return output_projection(torch.cat(parts, dim=-1))
 
+    @staticmethod
+    def _expand_default_token(reference: torch.Tensor, token: torch.Tensor) -> torch.Tensor:
+        batch_size, time_steps = reference.shape[:2]
+        return token.view(1, 1, -1).expand(batch_size, time_steps, -1)
 
-class StructuredActionEncoder(nn.Module):
+
+class FlatActionEncoder(nn.Module):
     def __init__(
         self,
         *,
@@ -171,25 +175,225 @@ class StructuredActionEncoder(nn.Module):
             categorical_input = torch.cat(embeddings, dim=-1)
             parts.append(self.categorical_projection(categorical_input))
         if not parts:
-            shape = action_numeric.shape[:-1] + (self.null_action.numel(),)
-            return self.null_action.view(1, 1, -1).expand(shape)
+            return self._expand_default_token(action_numeric, self.null_action)
         if len(parts) == 1:
             encoded = parts[0]
         else:
             output_projection = self.output_projection
-            if output_projection is None:
-                encoded = parts[0]
-            else:
-                encoded = output_projection(torch.cat(parts, dim=-1))
-        no_action_rows = (
-            (action_numeric.abs().sum(dim=-1) + action_masks.abs().sum(dim=-1)) == 0
-        ).float()
-        if action_categorical.size(-1) > 0:
-            no_action_rows = no_action_rows * (action_categorical.sum(dim=-1) == 0).float()
+            encoded = (
+                parts[0]
+                if output_projection is None
+                else output_projection(torch.cat(parts, dim=-1))
+            )
+        no_action_rows = _no_action_rows(action_numeric, action_masks, action_categorical)
+        null_action = self._expand_default_token(action_numeric, self.null_action)
+        return torch.where(no_action_rows.unsqueeze(-1), null_action, encoded)
+
+    @staticmethod
+    def _expand_default_token(reference: torch.Tensor, token: torch.Tensor) -> torch.Tensor:
+        batch_size, time_steps = reference.shape[:2]
+        return token.view(1, 1, -1).expand(batch_size, time_steps, -1)
+
+
+class NumericFeatureTokenizer(nn.Module):
+    def __init__(self, feature_count: int, token_dim: int) -> None:
+        super().__init__()
+        self.feature_count = feature_count
+        self.token_dim = token_dim
+        self.value_projection = (
+            MLPBlock(2, max(32, token_dim), token_dim) if feature_count > 0 else None
+        )
+        self.feature_embeddings = (
+            nn.Parameter(torch.randn(feature_count, token_dim) * 0.02)
+            if feature_count > 0
+            else None
+        )
+        self.type_embedding = (
+            nn.Parameter(torch.randn(token_dim) * 0.02) if feature_count > 0 else None
+        )
+
+    def forward(self, values: torch.Tensor, masks: torch.Tensor) -> torch.Tensor:
+        if self.feature_count == 0 or self.value_projection is None:
+            return values.new_zeros((*values.shape[:2], 0, self.token_dim))
+        token_inputs = torch.stack([values, masks], dim=-1)
+        tokens = self.value_projection(token_inputs)
+        feature_embeddings = cast(torch.Tensor, self.feature_embeddings).view(
+            1, 1, self.feature_count, self.token_dim
+        )
+        type_embedding = cast(torch.Tensor, self.type_embedding).view(1, 1, 1, self.token_dim)
+        return tokens + feature_embeddings + type_embedding
+
+
+class CategoricalFeatureTokenizer(nn.Module):
+    def __init__(self, cardinalities: list[int], token_dim: int) -> None:
+        super().__init__()
+        self.feature_count = len(cardinalities)
+        self.token_dim = token_dim
+        self.value_embeddings = nn.ModuleList(
+            [nn.Embedding(cardinality, token_dim) for cardinality in cardinalities]
+        )
+        self.feature_embeddings = (
+            nn.Parameter(torch.randn(self.feature_count, token_dim) * 0.02)
+            if self.feature_count > 0
+            else None
+        )
+        self.type_embedding = (
+            nn.Parameter(torch.randn(token_dim) * 0.02) if self.feature_count > 0 else None
+        )
+
+    def forward(self, categorical_ids: torch.Tensor) -> torch.Tensor:
+        if self.feature_count == 0:
+            return torch.zeros(
+                (*categorical_ids.shape[:2], 0, self.token_dim),
+                dtype=torch.float32,
+                device=categorical_ids.device,
+            )
+        feature_embeddings = cast(torch.Tensor, self.feature_embeddings)
+        type_embedding = cast(torch.Tensor, self.type_embedding)
+        tokens = []
+        for index, embedding in enumerate(self.value_embeddings):
+            token = embedding(categorical_ids[..., index])
+            token = token + feature_embeddings[index].view(1, 1, self.token_dim)
+            token = token + type_embedding.view(1, 1, self.token_dim)
+            tokens.append(token)
+        return torch.stack(tokens, dim=-2)
+
+
+class FeatureTokenMixer(nn.Module):
+    def __init__(self, token_dim: int, depth: int, heads: int, dropout: float) -> None:
+        super().__init__()
+        self.token_dim = token_dim
+        self.cls_token = nn.Parameter(torch.randn(token_dim) * 0.02)
+        mixer_heads = _choose_attention_heads(token_dim, heads)
+        layer = nn.TransformerEncoderLayer(
+            d_model=token_dim,
+            nhead=mixer_heads,
+            dropout=dropout,
+            batch_first=True,
+            dim_feedforward=max(64, token_dim * 4),
+            activation="gelu",
+        )
+        self.encoder = nn.TransformerEncoder(layer, num_layers=depth)
+        self.output_projection = MLPBlock(token_dim, max(64, token_dim), token_dim)
+
+    def forward(self, tokens: torch.Tensor) -> torch.Tensor:
+        batch_size, time_steps, token_count, token_dim = tokens.shape
+        cls_token = self.cls_token.view(1, 1, 1, token_dim).expand(
+            batch_size, time_steps, 1, token_dim
+        )
+        hidden = torch.cat([cls_token, tokens], dim=-2)
+        hidden = hidden.reshape(batch_size * time_steps, token_count + 1, token_dim)
+        hidden = self.encoder(hidden)
+        pooled = hidden[:, 0].reshape(batch_size, time_steps, token_dim)
+        return self.output_projection(pooled)
+
+
+class TokenizedStateEncoder(nn.Module):
+    def __init__(
+        self,
+        *,
+        observation_numeric_dim: int,
+        observation_cardinalities: list[int],
+        d_state: int,
+        depth: int,
+        heads: int,
+        dropout: float,
+    ) -> None:
+        super().__init__()
+        self.numeric_tokenizer = NumericFeatureTokenizer(observation_numeric_dim, d_state)
+        self.categorical_tokenizer = CategoricalFeatureTokenizer(observation_cardinalities, d_state)
+        self.mixer = FeatureTokenMixer(d_state, depth, heads, dropout)
+        self.empty_token = nn.Parameter(torch.zeros(d_state))
+
+    def forward(
+        self,
+        observation_numeric: torch.Tensor,
+        observation_masks: torch.Tensor,
+        observation_categorical: torch.Tensor,
+    ) -> torch.Tensor:
+        tokens = self._collect_tokens(
+            observation_numeric=observation_numeric,
+            observation_masks=observation_masks,
+            observation_categorical=observation_categorical,
+        )
+        if tokens is None:
+            batch_size, time_steps = observation_numeric.shape[:2]
+            return self.empty_token.view(1, 1, -1).expand(batch_size, time_steps, -1)
+        return self.mixer(tokens)
+
+    def _collect_tokens(
+        self,
+        *,
+        observation_numeric: torch.Tensor,
+        observation_masks: torch.Tensor,
+        observation_categorical: torch.Tensor,
+    ) -> torch.Tensor | None:
+        parts: list[torch.Tensor] = []
+        numeric_tokens = self.numeric_tokenizer(observation_numeric, observation_masks)
+        if numeric_tokens.size(-2) > 0:
+            parts.append(numeric_tokens)
+        categorical_tokens = self.categorical_tokenizer(observation_categorical)
+        if categorical_tokens.size(-2) > 0:
+            parts.append(categorical_tokens)
+        if not parts:
+            return None
+        return torch.cat(parts, dim=-2)
+
+
+class TokenizedActionEncoder(nn.Module):
+    def __init__(
+        self,
+        *,
+        action_numeric_dim: int,
+        action_cardinalities: list[int],
+        d_action: int,
+        depth: int,
+        heads: int,
+        dropout: float,
+    ) -> None:
+        super().__init__()
+        self.numeric_tokenizer = NumericFeatureTokenizer(action_numeric_dim, d_action)
+        self.categorical_tokenizer = CategoricalFeatureTokenizer(action_cardinalities, d_action)
+        self.mixer = FeatureTokenMixer(d_action, depth, heads, dropout)
+        self.null_action = nn.Parameter(torch.zeros(d_action))
+
+    def forward(
+        self,
+        action_numeric: torch.Tensor,
+        action_masks: torch.Tensor,
+        action_categorical: torch.Tensor,
+    ) -> torch.Tensor:
+        tokens = self._collect_tokens(
+            action_numeric=action_numeric,
+            action_masks=action_masks,
+            action_categorical=action_categorical,
+        )
+        if tokens is None:
+            batch_size, time_steps = action_numeric.shape[:2]
+            return self.null_action.view(1, 1, -1).expand(batch_size, time_steps, -1)
+
+        encoded = self.mixer(tokens)
+        no_action_rows = _no_action_rows(action_numeric, action_masks, action_categorical)
         null_action = self.null_action.view(1, 1, -1).expand_as(encoded)
-        return encoded * (
-            1.0 - no_action_rows.unsqueeze(-1)
-        ) + null_action * no_action_rows.unsqueeze(-1)
+        return torch.where(no_action_rows.unsqueeze(-1), null_action, encoded)
+
+    def _collect_tokens(
+        self,
+        *,
+        action_numeric: torch.Tensor,
+        action_masks: torch.Tensor,
+        action_categorical: torch.Tensor,
+    ) -> torch.Tensor | None:
+        parts: list[torch.Tensor] = []
+        numeric_tokens = self.numeric_tokenizer(action_numeric, action_masks)
+        if numeric_tokens.size(-2) > 0:
+            parts.append(numeric_tokens)
+        categorical_tokens = self.categorical_tokenizer(action_categorical)
+        if categorical_tokens.size(-2) > 0:
+            parts.append(categorical_tokens)
+        if not parts:
+            return None
+        return torch.cat(parts, dim=-2)
 
 
 class CausalPredictor(nn.Module):
@@ -249,20 +453,68 @@ class StructuredStateJEPA(nn.Module):
     ) -> None:
         super().__init__()
         self.config = config
-        self.state_encoder = StructuredStateEncoder(
+        self.state_encoder = self._build_state_encoder(
+            config=config,
+            observation_numeric_dim=observation_numeric_dim,
+            observation_mask_dim=observation_mask_dim,
+            observation_cardinalities=observation_cardinalities,
+        )
+        self.action_encoder = self._build_action_encoder(
+            config=config,
+            action_numeric_dim=action_numeric_dim,
+            action_mask_dim=action_mask_dim,
+            action_cardinalities=action_cardinalities,
+        )
+        self.predictor = CausalPredictor(config)
+        self.sigreg = SIGReg(knots=config.sigreg_knots, num_proj=config.sigreg_num_proj)
+
+    @staticmethod
+    def _build_state_encoder(
+        *,
+        config: ModelConfig,
+        observation_numeric_dim: int,
+        observation_mask_dim: int,
+        observation_cardinalities: list[int],
+    ) -> nn.Module:
+        if config.encoder_type == "tokenized":
+            return TokenizedStateEncoder(
+                observation_numeric_dim=observation_numeric_dim,
+                observation_cardinalities=observation_cardinalities,
+                d_state=config.d_state,
+                depth=config.feature_token_depth,
+                heads=config.heads,
+                dropout=config.dropout,
+            )
+        return FlatStateEncoder(
             observation_numeric_dim=observation_numeric_dim,
             observation_mask_dim=observation_mask_dim,
             observation_cardinalities=observation_cardinalities,
             d_state=config.d_state,
         )
-        self.action_encoder = StructuredActionEncoder(
+
+    @staticmethod
+    def _build_action_encoder(
+        *,
+        config: ModelConfig,
+        action_numeric_dim: int,
+        action_mask_dim: int,
+        action_cardinalities: list[int],
+    ) -> nn.Module:
+        if config.encoder_type == "tokenized":
+            return TokenizedActionEncoder(
+                action_numeric_dim=action_numeric_dim,
+                action_cardinalities=action_cardinalities,
+                d_action=config.d_action,
+                depth=config.feature_token_depth,
+                heads=config.heads,
+                dropout=config.dropout,
+            )
+        return FlatActionEncoder(
             action_numeric_dim=action_numeric_dim,
             action_mask_dim=action_mask_dim,
             action_cardinalities=action_cardinalities,
             d_action=config.d_action,
         )
-        self.predictor = CausalPredictor(config)
-        self.sigreg = SIGReg(knots=config.sigreg_knots, num_proj=config.sigreg_num_proj)
 
     def encode_steps(self, batch: StepBatch) -> torch.Tensor:
         return self.state_encoder(
@@ -408,3 +660,22 @@ def _embedding_dim(cardinality: int) -> int:
     if cardinality <= 16:
         return 8
     return 16
+
+
+def _choose_attention_heads(model_dim: int, max_heads: int) -> int:
+    for head_count in range(min(model_dim, max_heads), 0, -1):
+        if model_dim % head_count == 0:
+            return head_count
+    return 1
+
+
+def _no_action_rows(
+    action_numeric: torch.Tensor,
+    action_masks: torch.Tensor,
+    action_categorical: torch.Tensor,
+) -> torch.Tensor:
+    no_numeric_signal = (action_numeric.abs().sum(dim=-1) + action_masks.abs().sum(dim=-1)) == 0
+    if action_categorical.size(-1) == 0:
+        return no_numeric_signal
+    no_categorical_signal = action_categorical.eq(0).all(dim=-1)
+    return no_numeric_signal & no_categorical_signal

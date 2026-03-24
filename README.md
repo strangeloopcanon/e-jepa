@@ -40,6 +40,7 @@ In short:
 Compared with the pixel setting, E-JEPA changes four main things:
 
 - the image encoder is replaced with a structured-state encoder for numeric, categorical, and missing-value features
+- the training interface now supports both a flat encoder and a tokenized encoder, so enterprise state can be learned either as one wide step vector or as a set of typed feature tokens
 - actions are represented explicitly as business controls or VEI tool choices
 - raw business and VEI data are converted into one common step format: `steps.parquet` plus `schema.json`
 - evaluation is geared toward enterprise use cases: next-state prediction, surprise scoring, and simple readouts of business quantities
@@ -137,6 +138,12 @@ uv run e-jepa prepare-timeseries \
 uv run e-jepa train \
   --dataset ./out/business_dataset \
   --output ./out/checkpoints/business_model
+
+# Try the richer tokenized state encoder.
+uv run e-jepa train \
+  --dataset ./out/business_dataset \
+  --output ./out/checkpoints/business_model_tokenized \
+  --encoder tokenized
 ```
 
 ## VEI examples

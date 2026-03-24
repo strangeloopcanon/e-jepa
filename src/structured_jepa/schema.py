@@ -76,12 +76,14 @@ class DatasetSchema(BaseModel):
 
 
 class ModelConfig(BaseModel):
+    encoder_type: Literal["flat", "tokenized"] = "flat"
     d_state: int = 128
     d_action: int = 64
     context_length: int = 16
     depth: int = 4
     heads: int = 8
     dropout: float = 0.1
+    feature_token_depth: int = 2
     sigreg_lambda: float = 0.05
     sigreg_knots: int = 17
     sigreg_num_proj: int = 512

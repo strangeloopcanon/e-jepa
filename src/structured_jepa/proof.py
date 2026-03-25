@@ -500,6 +500,9 @@ def _select_timeseries_columns(schema: DatasetSchema) -> list[str]:
 def _select_demo_columns(schema: DatasetSchema, max_columns: int = 6) -> list[str]:
     priority_patterns = [
         "obs_num__pending_total__all",
+        "obs_num__surface_panel_count__all",
+        "obs_num__surface_status__",
+        "obs_num__surface_signal__",
         "obs_num__clock_time_ms",
         "obs_num__graph_count__",
         "obs_num__graph_status__",

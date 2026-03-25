@@ -128,6 +128,7 @@ def test_benchmark_vei_demo_command_writes_readable_bundle_with_multiple_columns
     surface = json.loads((demo_root / "run_surface_summary.json").read_text(encoding="utf-8"))
     assert len(steps) == 3
     assert len(decoded["selected_columns"]) > 1
+    assert any("surface_" in column for column in decoded["selected_columns"])
     assert surface["company_name"] == "Acme Living"
     first = steps[0]
     assert "action" in first
@@ -287,18 +288,51 @@ def _write_long_playable_run_fixture(workspace_root: Path) -> str:
                     {"target": "communications"} for _ in range(max(0, 3 - (step_index % 4)))
                 ],
                 "components": {
+                    "slack": {
+                        "channels": {
+                            "general": {
+                                "unread": max(0, 4 - (step_index % 5)),
+                                "messages": [
+                                    {
+                                        "ts": f"{step_index + 1}.1",
+                                        "user": "leasing-agent",
+                                        "text": f"Tenant update {step_index + 1}",
+                                    }
+                                ],
+                            }
+                        }
+                    },
+                    "tickets": {
+                        "tickets": {
+                            "ticket-1": {
+                                "ticket_id": "ticket-1",
+                                "status": "closed" if step_index > 12 else "open",
+                                "title": "Lease handoff",
+                            },
+                            "ticket-2": {
+                                "ticket_id": "ticket-2",
+                                "status": "closed" if step_index > 20 else "open",
+                                "title": "Key pickup",
+                            },
+                        }
+                    },
+                    "servicedesk": {
+                        "requests": {
+                            "req-1": {
+                                "request_id": "req-1",
+                                "status": "approved" if step_index > 10 else "pending_approval",
+                                "approvals": [
+                                    {"status": "APPROVED" if step_index > 10 else "PENDING"}
+                                ],
+                            }
+                        }
+                    },
                     "identity_graph": {
                         "users": {
                             "user-1": {"status": "active"},
                             "user-2": {"status": "active" if step_index > 8 else "pending"},
                             "user-3": {"status": "suspended" if step_index > 18 else "active"},
                         }
-                    },
-                    "communications": {
-                        "tickets": {
-                            "ticket-1": {"status": "closed" if step_index > 12 else "open"},
-                            "ticket-2": {"status": "closed" if step_index > 20 else "open"},
-                        },
                     },
                 },
             },

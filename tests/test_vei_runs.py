@@ -10,6 +10,7 @@ import pytest
 
 from structured_jepa.storage import load_processed_dataset
 from structured_jepa.vei_runs import prepare_vei_runs_dataset
+from structured_jepa.vei_surface_features import summarize_snapshot_surface_features
 
 
 def _enable_vei_imports() -> bool:
@@ -67,10 +68,14 @@ def test_prepare_vei_runs_dataset_from_playable_workspace(tmp_path: Path) -> Non
     assert "meta__mission_name" in loaded.frame.columns
     assert "meta__snapshot_id" in loaded.frame.columns
     assert "meta__surface_panel_count" in loaded.frame.columns
+    assert "obs_num__surface_panel_count__all" in loaded.frame.columns
+    assert "obs_num__surface_signal__slack_unread" in loaded.frame.columns
+    assert "obs_cat__surface_primary_panel" in loaded.frame.columns
     assert any(
         column.startswith("obs_num__interval_event_count__") for column in loaded.frame.columns
     )
     assert loaded.schema.notes["workspace_root"] == str(workspace_root.resolve())
+    assert loaded.frame["obs_cat__surface_primary_panel"].astype(str).ne("__missing__").any()
 
 
 def test_prepare_vei_runs_dataset_can_use_public_api_helpers_without_snapshot_files(
@@ -121,8 +126,35 @@ def test_prepare_vei_runs_dataset_can_use_public_api_helpers_without_snapshot_fi
                     "data": {
                         "pending_events": [{"target": "work_management"}],
                         "components": {
+                            "slack": {
+                                "channels": {
+                                    "general": {
+                                        "unread": 2,
+                                        "messages": [
+                                            {"ts": "1000.1", "user": "ops", "text": "Heads up"}
+                                        ],
+                                    }
+                                }
+                            },
+                            "tickets": {
+                                "tickets": {
+                                    "ticket-1": {
+                                        "ticket_id": "ticket-1",
+                                        "status": "open",
+                                        "title": "Launch issue",
+                                    }
+                                }
+                            },
+                            "servicedesk": {
+                                "requests": {
+                                    "req-1": {
+                                        "request_id": "req-1",
+                                        "status": "pending_approval",
+                                        "approvals": [{"status": "PENDING"}],
+                                    }
+                                }
+                            },
                             "identity_graph": {"users": {"user-1": {"status": "active"}}},
-                            "communications": {"tickets": {"ticket-1": {"status": "open"}}},
                         },
                     },
                 },
@@ -133,8 +165,35 @@ def test_prepare_vei_runs_dataset_can_use_public_api_helpers_without_snapshot_fi
                     "data": {
                         "pending_events": [],
                         "components": {
+                            "slack": {
+                                "channels": {
+                                    "general": {
+                                        "unread": 0,
+                                        "messages": [
+                                            {"ts": "2000.1", "user": "ops", "text": "Resolved"}
+                                        ],
+                                    }
+                                }
+                            },
+                            "tickets": {
+                                "tickets": {
+                                    "ticket-1": {
+                                        "ticket_id": "ticket-1",
+                                        "status": "closed",
+                                        "title": "Launch issue",
+                                    }
+                                }
+                            },
+                            "servicedesk": {
+                                "requests": {
+                                    "req-1": {
+                                        "request_id": "req-1",
+                                        "status": "approved",
+                                        "approvals": [{"status": "APPROVED"}],
+                                    }
+                                }
+                            },
                             "identity_graph": {"users": {"user-1": {"status": "active"}}},
-                            "communications": {"tickets": {"ticket-1": {"status": "closed"}}},
                         },
                     },
                 },
@@ -175,8 +234,61 @@ def test_prepare_vei_runs_dataset_can_use_public_api_helpers_without_snapshot_fi
         "Acme Holdings",
         "Acme Holdings",
     ]
+    assert "obs_num__surface_signal__slack_unread" in loaded.frame.columns
+    assert "obs_cat__surface_primary_status" in loaded.frame.columns
     assert loaded.frame["action_name"].tolist()[0] == "jira.transition_issue"
     assert loaded.frame["action_name"].tolist()[1] == "__none__"
+
+
+def test_surface_feature_summary_extracts_panel_counts_and_priority() -> None:
+    numeric, categorical = summarize_snapshot_surface_features(
+        {
+            "components": {
+                "slack": {
+                    "channels": {
+                        "general": {
+                            "unread": 3,
+                            "messages": [
+                                {"ts": "1.0", "user": "ops", "text": "Update 1"},
+                                {"ts": "2.0", "user": "ops", "text": "Update 2"},
+                            ],
+                        }
+                    }
+                },
+                "tickets": {
+                    "tickets": {
+                        "ticket-1": {"ticket_id": "ticket-1", "status": "open"},
+                        "ticket-2": {"ticket_id": "ticket-2", "status": "closed"},
+                    }
+                },
+                "servicedesk": {
+                    "requests": {
+                        "req-1": {
+                            "request_id": "req-1",
+                            "status": "pending_approval",
+                            "approvals": [{"status": "PENDING"}],
+                        }
+                    }
+                },
+                "inventory_ops": {
+                    "capacity_pools": {
+                        "pool-1": {
+                            "total_units": 100,
+                            "reserved_units": 96,
+                        }
+                    },
+                    "quotes": {"quote-1": {"status": "open"}},
+                },
+            }
+        }
+    )
+
+    assert numeric["surface_panel_count__all"] == 4.0
+    assert numeric["surface_signal__slack_unread"] == 3.0
+    assert numeric["surface_signal__approvals_pending"] == 2.0
+    assert numeric["surface_signal__inventory_low_headroom_critical"] == 1.0
+    assert categorical["surface_primary_panel"] == "vertical_inventory"
+    assert categorical["surface_primary_status"] == "critical"
 
 
 def _write_playable_run_fixture(workspace_root: Path) -> str:
@@ -241,14 +353,43 @@ def _write_playable_run_fixture(workspace_root: Path) -> str:
             "data": {
                 "pending_events": [{"target": "communications"}],
                 "components": {
+                    "slack": {
+                        "channels": {
+                            "general": {
+                                "unread": 2,
+                                "messages": [
+                                    {
+                                        "ts": "1000.1",
+                                        "user": "agent",
+                                        "text": "Tenant raised a conflict",
+                                    }
+                                ],
+                            }
+                        }
+                    },
+                    "tickets": {
+                        "tickets": {
+                            "ticket-1": {
+                                "ticket_id": "ticket-1",
+                                "status": "open",
+                                "title": "Lease handoff",
+                            }
+                        }
+                    },
+                    "servicedesk": {
+                        "requests": {
+                            "req-1": {
+                                "request_id": "req-1",
+                                "status": "pending_approval",
+                                "approvals": [{"status": "PENDING"}],
+                            }
+                        }
+                    },
                     "identity_graph": {
                         "users": {
                             "user-1": {"status": "active"},
                             "user-2": {"status": "pending"},
                         }
-                    },
-                    "communications": {
-                        "tickets": {"ticket-1": {"status": "open"}},
                     },
                 },
             },
@@ -259,14 +400,43 @@ def _write_playable_run_fixture(workspace_root: Path) -> str:
             "data": {
                 "pending_events": [],
                 "components": {
+                    "slack": {
+                        "channels": {
+                            "general": {
+                                "unread": 0,
+                                "messages": [
+                                    {
+                                        "ts": "2000.1",
+                                        "user": "agent",
+                                        "text": "Conflict resolved",
+                                    }
+                                ],
+                            }
+                        }
+                    },
+                    "tickets": {
+                        "tickets": {
+                            "ticket-1": {
+                                "ticket_id": "ticket-1",
+                                "status": "closed",
+                                "title": "Lease handoff",
+                            }
+                        }
+                    },
+                    "servicedesk": {
+                        "requests": {
+                            "req-1": {
+                                "request_id": "req-1",
+                                "status": "approved",
+                                "approvals": [{"status": "APPROVED"}],
+                            }
+                        }
+                    },
                     "identity_graph": {
                         "users": {
                             "user-1": {"status": "active"},
                             "user-2": {"status": "active"},
                         }
-                    },
-                    "communications": {
-                        "tickets": {"ticket-1": {"status": "closed"}},
                     },
                 },
             },

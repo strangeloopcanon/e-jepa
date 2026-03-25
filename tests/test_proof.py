@@ -57,6 +57,7 @@ def test_benchmark_timeseries_command_writes_report_and_all_variants(tmp_path: P
 
 def test_benchmark_vei_demo_command_writes_readable_bundle_with_multiple_columns(
     tmp_path: Path,
+    monkeypatch,
 ) -> None:
     workspace_root = tmp_path / "workspace"
     run_id = _write_long_playable_run_fixture(workspace_root)
@@ -68,6 +69,36 @@ def test_benchmark_vei_demo_command_writes_readable_bundle_with_multiple_columns
     artifacts = train_model(
         dataset_root=prepared.root,
         output_dir=tmp_path / "model",
+    )
+    monkeypatch.setattr(
+        "structured_jepa.proof.load_run_surface_summary",
+        lambda **_: (
+            {
+                "company_name": "Acme Living",
+                "vertical_name": "property_management",
+                "current_tension": "Resolve the tenant conflict quickly.",
+                "panel_titles": ["Work Tracker", "Team Chat", "Email"],
+                "panel_count": 3,
+                "item_count": 7,
+                "ok_count": 1,
+                "attention_count": 2,
+                "warning_count": 0,
+                "critical_count": 0,
+            },
+            True,
+        ),
+    )
+    monkeypatch.setattr(
+        "structured_jepa.proof.load_snapshot_diff_summary",
+        lambda **_: {
+            "added_count": 1,
+            "removed_count": 0,
+            "changed_count": 2,
+            "top_changes": [
+                "components.communications.tickets.ticket-1.status: open -> closed",
+                "pending_events: 1 -> 0",
+            ],
+        },
     )
 
     result = runner.invoke(
@@ -89,20 +120,29 @@ def test_benchmark_vei_demo_command_writes_readable_bundle_with_multiple_columns
     demo_root = tmp_path / "demo"
     assert (demo_root / "demo_steps.json").exists()
     assert (demo_root / "decoded_summary.json").exists()
+    assert (demo_root / "run_surface_summary.json").exists()
     assert (demo_root / "summary.md").exists()
 
     steps = json.loads((demo_root / "demo_steps.json").read_text(encoding="utf-8"))
     decoded = json.loads((demo_root / "decoded_summary.json").read_text(encoding="utf-8"))
+    surface = json.loads((demo_root / "run_surface_summary.json").read_text(encoding="utf-8"))
     assert len(steps) == 3
     assert len(decoded["selected_columns"]) > 1
+    assert surface["company_name"] == "Acme Living"
     first = steps[0]
     assert "action" in first
     assert "current_state_summary" in first
     assert "predicted_next_state_summary" in first
     assert "actual_next_state_summary" in first
     assert "surprise_score" in first
+    assert "actual_change_summary" in first
     assert len(first["predicted_next_state_summary"]) > 1
     assert set(first["predicted_next_state_summary"]) == set(first["actual_next_state_summary"])
+    assert first["actual_change_summary"]["changed_count"] == 2
+
+    summary = (demo_root / "summary.md").read_text(encoding="utf-8")
+    assert "Run Surface Context" in summary
+    assert "Observed VEI changes" in summary
 
 
 def test_write_brief_command_uses_generated_artifacts(tmp_path: Path) -> None:

@@ -10,6 +10,12 @@ import pandas as pd
 
 from .storage import PreparedDataset, finalize_processed_dataset
 from .utils import make_split_map, normalize_token
+from .vei_support import (
+    empty_surface_summary,
+    load_run_snapshots,
+    load_run_surface_summary,
+    load_run_timeline,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -34,14 +40,29 @@ def prepare_vei_runs_dataset(
         extra={"workspace": str(workspace), "run_count": len(selected_run_ids)},
     )
     rows: list[dict[str, object]] = []
+    used_public_snapshot_api = False
+    used_public_timeline_api = False
+    used_public_surface_api = False
     metadata_columns = [
         "meta__runner",
         "meta__scenario_name",
         "meta__branch",
+        "meta__snapshot_id",
+        "meta__snapshot_label",
         "meta__mission_name",
         "meta__objective_variant",
         "meta__scorecard_overall_score",
         "meta__branch_label_count",
+        "meta__surface_company_name",
+        "meta__surface_vertical_name",
+        "meta__surface_current_tension",
+        "meta__surface_panel_titles",
+        "meta__surface_panel_count",
+        "meta__surface_item_count",
+        "meta__surface_ok_count",
+        "meta__surface_attention_count",
+        "meta__surface_warning_count",
+        "meta__surface_critical_count",
     ]
 
     for run_id in selected_run_ids:
@@ -50,10 +71,27 @@ def prepare_vei_runs_dataset(
         if not manifest_path.exists():
             continue
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        timeline = _load_events(run_dir / "events.jsonl")
-        snapshots = _load_snapshots(run_dir)
+        timeline, timeline_used_public_api = load_run_timeline(
+            workspace_root=workspace,
+            run_id=run_id,
+            fallback_run_dir=run_dir,
+        )
+        snapshots, snapshots_used_public_api = load_run_snapshots(
+            workspace_root=workspace,
+            run_id=run_id,
+            fallback_run_dir=run_dir,
+        )
         if not snapshots:
             continue
+        surface_summary, surface_used_public_api = load_run_surface_summary(
+            workspace_root=workspace,
+            run_id=run_id,
+        )
+        if not surface_summary:
+            surface_summary = empty_surface_summary()
+        used_public_timeline_api = used_public_timeline_api or timeline_used_public_api
+        used_public_snapshot_api = used_public_snapshot_api or snapshots_used_public_api
+        used_public_surface_api = used_public_surface_api or surface_used_public_api
 
         mission_state = _load_mission_state(run_dir)
         snapshot_times = [
@@ -90,12 +128,24 @@ def prepare_vei_runs_dataset(
                 "meta__runner": str(manifest.get("runner", "")),
                 "meta__scenario_name": str(manifest.get("scenario_name", "")),
                 "meta__branch": str(manifest.get("branch", "")),
+                "meta__snapshot_id": int(snapshot.get("snapshot_id", index + 1) or index + 1),
+                "meta__snapshot_label": str(snapshot.get("label") or ""),
                 "meta__mission_name": str(mission_state.get("mission_name", "")),
                 "meta__objective_variant": str(mission_state.get("objective_variant", "")),
                 "meta__scorecard_overall_score": float(
                     mission_state.get("scorecard_overall_score", 0.0)
                 ),
                 "meta__branch_label_count": int(mission_state.get("branch_label_count", 0)),
+                "meta__surface_company_name": _surface_text(surface_summary, "company_name"),
+                "meta__surface_vertical_name": _surface_text(surface_summary, "vertical_name"),
+                "meta__surface_current_tension": _surface_text(surface_summary, "current_tension"),
+                "meta__surface_panel_titles": _surface_panel_titles(surface_summary),
+                "meta__surface_panel_count": _surface_count(surface_summary, "panel_count"),
+                "meta__surface_item_count": _surface_count(surface_summary, "item_count"),
+                "meta__surface_ok_count": _surface_count(surface_summary, "ok_count"),
+                "meta__surface_attention_count": _surface_count(surface_summary, "attention_count"),
+                "meta__surface_warning_count": _surface_count(surface_summary, "warning_count"),
+                "meta__surface_critical_count": _surface_count(surface_summary, "critical_count"),
                 "clock_time_ms": float(snapshot_time),
             }
             row.update(pending_summary)
@@ -158,25 +208,14 @@ def prepare_vei_runs_dataset(
         action_categorical_columns=action_categorical_columns,
         auxiliary_numeric_targets=[],
         metadata_columns=metadata_columns,
-        notes={"run_count": steps["episode_id"].nunique()},
+        notes={
+            "run_count": steps["episode_id"].nunique(),
+            "workspace_root": str(workspace),
+            "vei_public_snapshot_api_used": used_public_snapshot_api,
+            "vei_public_timeline_api_used": used_public_timeline_api,
+            "vei_public_surface_api_used": used_public_surface_api,
+        },
     )
-
-
-def _load_events(path: Path) -> list[dict[str, Any]]:
-    if not path.exists():
-        return []
-    records: list[dict[str, Any]] = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        if line.strip():
-            records.append(json.loads(line))
-    return records
-
-
-def _load_snapshots(run_dir: Path) -> list[dict[str, Any]]:
-    snapshot_paths = sorted((run_dir / "state").rglob("snapshots/*.json"))
-    snapshots = [json.loads(path.read_text(encoding="utf-8")) for path in snapshot_paths]
-    snapshots.sort(key=lambda payload: int(payload.get("clock_ms", payload.get("time_ms", 0)) or 0))
-    return snapshots
 
 
 def _load_mission_state(run_dir: Path) -> dict[str, Any]:
@@ -194,6 +233,36 @@ def _load_mission_state(run_dir: Path) -> dict[str, Any]:
         if isinstance(mission, dict)
         else 0,
     }
+
+
+def _surface_text(surface_summary: dict[str, object], key: str) -> str:
+    value = surface_summary.get(key, "")
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def _surface_panel_titles(surface_summary: dict[str, object]) -> str:
+    value = surface_summary.get("panel_titles", [])
+    if not isinstance(value, list):
+        return ""
+    return ", ".join(str(title) for title in value if title is not None)
+
+
+def _surface_count(surface_summary: dict[str, object], key: str) -> int:
+    value = surface_summary.get(key, 0)
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return 0
+    return 0
 
 
 def _last_action_event(events: list[dict[str, Any]]) -> dict[str, Any] | None:

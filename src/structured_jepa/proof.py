@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Sized
+from numbers import Integral, Real
 from pathlib import Path
 from typing import Any, cast
 
@@ -22,6 +23,7 @@ from .storage import (
 )
 from .training import evaluate_model, load_trained_model, train_model
 from .utils import ensure_directory, json_dump
+from .vei_support import load_run_surface_summary, load_snapshot_diff_summary
 
 VARIANT_LABELS = {
     "flat": "Flat encoder",
@@ -207,6 +209,10 @@ def benchmark_vei_demo(
         device=device,
     )
     episode_rows = _select_demo_episode(prepared.frame, schema, episode_id)
+    run_surface_summary = _resolve_vei_run_surface_summary(
+        prepared=prepared,
+        episode_rows=episode_rows,
+    )
     step_count = min(max_steps, len(episode_rows) - schema.window_size + 1)
     if step_count <= 0:
         raise ValueError("selected VEI episode is too short for the current context length")
@@ -230,11 +236,20 @@ def benchmark_vei_demo(
 
         current_row = window.iloc[schema.context_length - 1]
         next_row = window.iloc[schema.context_length]
+        actual_change_summary = _resolve_vei_snapshot_diff_summary(
+            prepared=prepared,
+            current_row=current_row,
+            next_row=next_row,
+        )
         step_entry = {
             "episode_id": str(current_row["episode_id"]),
             "current_step_idx": int(current_row["step_idx"]),
             "current_timestamp": str(current_row["timestamp"]),
             "next_timestamp": str(next_row["timestamp"]),
+            "current_snapshot_id": _int_metadata_value(current_row, "meta__snapshot_id"),
+            "next_snapshot_id": _int_metadata_value(next_row, "meta__snapshot_id"),
+            "current_snapshot_label": _string_metadata_value(current_row, "meta__snapshot_label"),
+            "next_snapshot_label": _string_metadata_value(next_row, "meta__snapshot_label"),
             "action": _build_action_summary(current_row, schema),
             "current_state_summary": _row_state_summary(current_row, schema, selected_columns),
             "predicted_next_state_summary": _decoded_state_summary(
@@ -244,18 +259,21 @@ def benchmark_vei_demo(
             ),
             "actual_next_state_summary": _row_state_summary(next_row, schema, selected_columns),
             "surprise_score": surprise_score,
+            "actual_change_summary": actual_change_summary,
         }
         steps.append(step_entry)
 
     decoded_summary = {
         "selected_columns": selected_columns,
         "selected_labels": _display_labels(schema, selected_columns),
+        "run_surface_summary": run_surface_summary,
         "steps": [
             {
                 "current_step_idx": step["current_step_idx"],
                 "current_state_summary": step["current_state_summary"],
                 "predicted_next_state_summary": step["predicted_next_state_summary"],
                 "actual_next_state_summary": step["actual_next_state_summary"],
+                "actual_change_summary": step["actual_change_summary"],
             }
             for step in steps
         ],
@@ -263,8 +281,10 @@ def benchmark_vei_demo(
 
     json_dump(output_root / "demo_steps.json", steps)
     json_dump(output_root / "decoded_summary.json", decoded_summary)
+    if run_surface_summary is not None:
+        json_dump(output_root / "run_surface_summary.json", run_surface_summary)
     (output_root / "summary.md").write_text(
-        _build_vei_demo_summary(steps, selected_columns, schema),
+        _build_vei_demo_summary(steps, selected_columns, schema, run_surface_summary),
         encoding="utf-8",
     )
     return output_root
@@ -596,6 +616,131 @@ def _denormalize_numeric_feature(feature: NumericFeatureSpec, normalized_value: 
     return float(normalized_value * feature.std + feature.mean)
 
 
+def _resolve_vei_run_surface_summary(
+    *,
+    prepared: PreparedDataset,
+    episode_rows: pd.DataFrame,
+) -> dict[str, object] | None:
+    if prepared.schema.dataset_kind != "vei_runs":
+        return None
+    if episode_rows.empty:
+        return None
+
+    first_row = episode_rows.iloc[0]
+    from_metadata = _surface_summary_from_metadata(first_row)
+    if from_metadata is not None:
+        return from_metadata
+
+    workspace_root = prepared.schema.notes.get("workspace_root")
+    if not isinstance(workspace_root, str) or not workspace_root.strip():
+        return None
+
+    run_id = str(first_row["episode_id"])
+    surface_summary, used_public_api = load_run_surface_summary(
+        workspace_root=Path(workspace_root),
+        run_id=run_id,
+    )
+    if not used_public_api:
+        return None
+    if (
+        _coerce_int(surface_summary.get("panel_count", 0)) == 0
+        and not str(surface_summary.get("current_tension", "")).strip()
+    ):
+        return None
+    return surface_summary
+
+
+def _resolve_vei_snapshot_diff_summary(
+    *,
+    prepared: PreparedDataset,
+    current_row: pd.Series,
+    next_row: pd.Series,
+) -> dict[str, object] | None:
+    if prepared.schema.dataset_kind != "vei_runs":
+        return None
+
+    workspace_root = prepared.schema.notes.get("workspace_root")
+    if not isinstance(workspace_root, str) or not workspace_root.strip():
+        return None
+
+    snapshot_from = _int_metadata_value(current_row, "meta__snapshot_id")
+    snapshot_to = _int_metadata_value(next_row, "meta__snapshot_id")
+    if snapshot_from is None or snapshot_to is None:
+        return None
+
+    return load_snapshot_diff_summary(
+        workspace_root=Path(workspace_root),
+        run_id=str(current_row["episode_id"]),
+        snapshot_from=snapshot_from,
+        snapshot_to=snapshot_to,
+    )
+
+
+def _surface_summary_from_metadata(row: pd.Series) -> dict[str, object] | None:
+    if "meta__surface_panel_count" not in row.index:
+        return None
+
+    panel_titles = [
+        title.strip()
+        for title in _string_metadata_value(row, "meta__surface_panel_titles").split(",")
+        if title.strip()
+    ]
+    summary = {
+        "company_name": _string_metadata_value(row, "meta__surface_company_name"),
+        "vertical_name": _string_metadata_value(row, "meta__surface_vertical_name"),
+        "current_tension": _string_metadata_value(row, "meta__surface_current_tension"),
+        "panel_titles": panel_titles,
+        "panel_count": _int_metadata_value(row, "meta__surface_panel_count") or 0,
+        "item_count": _int_metadata_value(row, "meta__surface_item_count") or 0,
+        "ok_count": _int_metadata_value(row, "meta__surface_ok_count") or 0,
+        "attention_count": _int_metadata_value(row, "meta__surface_attention_count") or 0,
+        "warning_count": _int_metadata_value(row, "meta__surface_warning_count") or 0,
+        "critical_count": _int_metadata_value(row, "meta__surface_critical_count") or 0,
+    }
+    if not any(
+        [
+            summary["company_name"],
+            summary["vertical_name"],
+            summary["current_tension"],
+            summary["panel_count"],
+            summary["item_count"],
+        ]
+    ):
+        return None
+    return summary
+
+
+def _string_metadata_value(row: pd.Series, column_name: str) -> str:
+    if column_name not in row.index:
+        return ""
+    raw_value = row[column_name]
+    if pd.isna(raw_value):
+        return ""
+    return str(raw_value)
+
+
+def _int_metadata_value(row: pd.Series, column_name: str) -> int | None:
+    if column_name not in row.index:
+        return None
+    raw_value = row[column_name]
+    if pd.isna(raw_value):
+        return None
+    return _coerce_int(raw_value, default=None)
+
+
+def _coerce_int(value: object, *, default: int | None = 0) -> int | None:
+    if isinstance(value, Integral):
+        return int(value)
+    if isinstance(value, Real):
+        return int(float(value))
+    if isinstance(value, str):
+        try:
+            return int(value)
+        except ValueError:
+            return default
+    return default
+
+
 def _build_benchmark_summary(metrics: dict[str, Any]) -> str:
     lines = [
         "# E-JEPA Benchmark Summary",
@@ -636,6 +781,7 @@ def _build_vei_demo_summary(
     steps: list[dict[str, Any]],
     selected_columns: list[str],
     schema: DatasetSchema,
+    run_surface_summary: dict[str, object] | None,
 ) -> str:
     lines = [
         "# VEI Demo Summary",
@@ -649,6 +795,32 @@ def _build_vei_demo_summary(
         "",
     ]
     lines.extend([f"- {label}" for label in _display_labels(schema, selected_columns)])
+    if run_surface_summary is not None:
+        lines.extend(
+            [
+                "",
+                "## Run Surface Context",
+                "",
+                f"- Company: `{run_surface_summary.get('company_name', '')}`",
+                f"- Vertical: `{run_surface_summary.get('vertical_name', '')}`",
+                f"- Current tension: `{run_surface_summary.get('current_tension', '')}`",
+                (
+                    "- Panel counts: "
+                    f"`{run_surface_summary.get('panel_count', 0)}` panels, "
+                    f"`{run_surface_summary.get('item_count', 0)}` items"
+                ),
+                (
+                    "- Status mix: "
+                    f"`ok={run_surface_summary.get('ok_count', 0)}`, "
+                    f"`attention={run_surface_summary.get('attention_count', 0)}`, "
+                    f"`warning={run_surface_summary.get('warning_count', 0)}`, "
+                    f"`critical={run_surface_summary.get('critical_count', 0)}`"
+                ),
+            ]
+        )
+        panel_titles = run_surface_summary.get("panel_titles", [])
+        if isinstance(panel_titles, list) and panel_titles:
+            lines.append("- Panels: " + ", ".join(f"`{str(title)}`" for title in panel_titles[:6]))
     for index, step in enumerate(steps, start=1):
         lines.extend(
             [
@@ -673,6 +845,22 @@ def _build_vei_demo_summary(
         lines.extend(
             [f"- {key}: {value}" for key, value in step["actual_next_state_summary"].items()]
         )
+        actual_change_summary = step.get("actual_change_summary")
+        if isinstance(actual_change_summary, dict):
+            lines.extend(
+                [
+                    "",
+                    "Observed VEI changes:",
+                    (
+                        f"- Changed: `{actual_change_summary.get('changed_count', 0)}`, "
+                        f"added: `{actual_change_summary.get('added_count', 0)}`, "
+                        f"removed: `{actual_change_summary.get('removed_count', 0)}`"
+                    ),
+                ]
+            )
+            top_changes = actual_change_summary.get("top_changes", [])
+            if isinstance(top_changes, list):
+                lines.extend(f"- {change}" for change in top_changes[:6])
     return "\n".join(lines) + "\n"
 
 

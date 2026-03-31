@@ -16,6 +16,7 @@ from .vei_support import (
     load_run_surface_summary,
     load_run_timeline,
 )
+from .vei_surface_features import summarize_snapshot_surface_features
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +115,9 @@ def prepare_vei_runs_dataset(
             graphs_summary, orientation_summary = _summarize_snapshot_state(state_payload)
             pending_summary = _summarize_pending_events(state_payload)
             interval_summary = _summarize_interval_events(interval_events)
+            surface_numeric_summary, surface_categorical_summary = (
+                summarize_snapshot_surface_features(state_payload)
+            )
 
             row: dict[str, object] = {
                 "episode_id": run_id,
@@ -152,6 +156,8 @@ def prepare_vei_runs_dataset(
             row.update(graphs_summary)
             row.update(orientation_summary)
             row.update(interval_summary)
+            row.update(surface_numeric_summary)
+            row.update(surface_categorical_summary)
             row.update(_action_features(aligned_action))
             rows.append(row)
 
@@ -174,6 +180,10 @@ def prepare_vei_runs_dataset(
         *sorted(column for column in steps.columns if column.startswith("graph_count__")),
         *sorted(column for column in steps.columns if column.startswith("graph_status__")),
         *sorted(column for column in steps.columns if column.startswith("orientation_count__")),
+        *sorted(column for column in steps.columns if column.startswith("surface_panel_count__")),
+        *sorted(column for column in steps.columns if column.startswith("surface_item_count__")),
+        *sorted(column for column in steps.columns if column.startswith("surface_status__")),
+        *sorted(column for column in steps.columns if column.startswith("surface_signal__")),
         *sorted(column for column in steps.columns if column.startswith("interval_event_count__")),
         *sorted(
             column for column in steps.columns if column.startswith("interval_object_ref_count__")
@@ -183,6 +193,8 @@ def prepare_vei_runs_dataset(
         "interval_last_resolved_tool",
         "interval_last_graph_domain",
         "interval_last_graph_action",
+        "surface_primary_panel",
+        "surface_primary_status",
     ]
     action_numeric_columns = [
         "action_object_ref_count_total",

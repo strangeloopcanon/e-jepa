@@ -174,6 +174,15 @@ uv run e-jepa benchmark-timeseries \
   --output ./out/benchmark_report
 ```
 
+Write the ablation report used for a publish pass:
+
+```bash
+uv run e-jepa ablation-timeseries \
+  --dataset ./out/business_dataset \
+  --output ./out/ablation_report \
+  --preset full
+```
+
 Write a short VEI demo bundle from a prepared VEI dataset and a trained checkpoint:
 
 ```bash
@@ -190,6 +199,16 @@ uv run e-jepa write-brief \
   --benchmark-dir ./out/benchmark_report \
   --vei-demo-dir ./out/vei_demo \
   --output ./out/show_yann.md
+```
+
+Generate one publish-ready artifact bundle with the benchmark report, ablations, brief, and optional VEI demo:
+
+```bash
+uv run e-jepa publish-bundle \
+  --benchmark-dataset ./out/business_dataset \
+  --vei-dataset ./out/vei_runs_dataset \
+  --output ./out/publish_bundle \
+  --preset full
 ```
 
 ## Verification

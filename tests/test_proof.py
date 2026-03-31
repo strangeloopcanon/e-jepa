@@ -7,6 +7,8 @@ import pandas as pd
 from typer.testing import CliRunner
 
 from structured_jepa.cli import app
+from structured_jepa.proof import _ensure_usable_context_dataset
+from structured_jepa.storage import load_processed_dataset
 from structured_jepa.timeseries import prepare_timeseries_dataset
 from structured_jepa.training import train_model
 from structured_jepa.vei_runs import prepare_vei_runs_dataset
@@ -49,10 +51,12 @@ def test_benchmark_timeseries_command_writes_report_and_all_variants(tmp_path: P
     assert (benchmark_root / "summary.md").exists()
     assert (benchmark_root / "prediction_quality.svg").exists()
     assert (benchmark_root / "surprise_separation.svg").exists()
+    assert (benchmark_root / "training_curves.svg").exists()
 
     metrics = json.loads((benchmark_root / "metrics.json").read_text(encoding="utf-8"))
     assert set(metrics["variants"]) == {"flat", "tokenized", "flat_no_actions", "persistence"}
     assert metrics["action_aware_beats_persistence"] is True
+    assert "history" in metrics["variants"]["flat"]
 
 
 def test_benchmark_vei_demo_command_writes_readable_bundle_with_multiple_columns(
@@ -192,6 +196,162 @@ def test_write_brief_command_uses_generated_artifacts(tmp_path: Path) -> None:
     assert "What this is" in brief
     assert "Evidence it learns useful dynamics" in brief
     assert "What it does not claim yet" in brief
+
+
+def test_ablation_timeseries_command_writes_report_and_studies(tmp_path: Path) -> None:
+    input_path = _write_benchmark_timeseries_csv(tmp_path)
+    prepared = prepare_timeseries_dataset(
+        input_path=input_path,
+        output_dir=tmp_path / "dataset",
+        entity_column="entity_id",
+        timestamp_column="event_ts",
+        observation_categorical_columns=["team", "segment"],
+        action_numeric_columns=["control"],
+        action_categorical_columns=["campaign"],
+        auxiliary_numeric_target_columns=["target_backlog"],
+        seed=7,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "ablation-timeseries",
+            "--dataset",
+            str(prepared.root),
+            "--output",
+            str(tmp_path / "ablations"),
+            "--preset",
+            "quick",
+            "--epochs",
+            "4",
+            "--batch-size",
+            "10",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    ablation_root = tmp_path / "ablations"
+    assert (ablation_root / "metrics.json").exists()
+    assert (ablation_root / "summary.md").exists()
+    assert (ablation_root / "prediction_quality.svg").exists()
+    assert (ablation_root / "surprise_separation.svg").exists()
+    assert (ablation_root / "training_curves.svg").exists()
+
+    metrics = json.loads((ablation_root / "metrics.json").read_text(encoding="utf-8"))
+    assert set(metrics["studies"]) == {
+        "latent_size",
+        "dropout",
+        "sigreg_lambda",
+        "predictor_depth",
+        "context_length",
+    }
+    assert metrics["studies"]["latent_size"]["best_variant"]
+    assert len(metrics["studies"]["dropout"]["variants"]) >= 2
+
+
+def test_publish_bundle_command_writes_artifact_pack(tmp_path: Path) -> None:
+    input_path = _write_benchmark_timeseries_csv(tmp_path)
+    business_prepared = prepare_timeseries_dataset(
+        input_path=input_path,
+        output_dir=tmp_path / "business_dataset",
+        entity_column="entity_id",
+        timestamp_column="event_ts",
+        observation_categorical_columns=["team", "segment"],
+        action_numeric_columns=["control"],
+        action_categorical_columns=["campaign"],
+        auxiliary_numeric_target_columns=["target_backlog"],
+        seed=7,
+    )
+    workspace_root = tmp_path / "workspace"
+    run_id = _write_long_playable_run_fixture(workspace_root)
+    vei_prepared = prepare_vei_runs_dataset(
+        workspace_root=workspace_root,
+        output_dir=tmp_path / "vei_dataset",
+        run_ids=[run_id],
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "publish-bundle",
+            "--benchmark-dataset",
+            str(business_prepared.root),
+            "--vei-dataset",
+            str(vei_prepared.root),
+            "--output",
+            str(tmp_path / "publish_bundle"),
+            "--preset",
+            "quick",
+            "--epochs",
+            "3",
+            "--batch-size",
+            "10",
+            "--vei-epochs",
+            "2",
+            "--vei-batch-size",
+            "4",
+            "--vei-max-steps",
+            "2",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    bundle_root = tmp_path / "publish_bundle"
+    assert (bundle_root / "benchmark" / "metrics.json").exists()
+    assert (bundle_root / "ablations" / "metrics.json").exists()
+    assert (bundle_root / "show_yann.md").exists()
+    assert (bundle_root / "methods_and_results.md").exists()
+    assert (bundle_root / "claims_and_limitations.md").exists()
+    assert (bundle_root / "summary_decoder.json").exists()
+    assert (bundle_root / "probe_results.json").exists()
+    assert (bundle_root / "artifact_index.md").exists()
+    assert (bundle_root / "manifest.json").exists()
+    assert (bundle_root / "vei_demo" / "summary.md").exists()
+
+    manifest = json.loads((bundle_root / "manifest.json").read_text(encoding="utf-8"))
+    assert "action_aware_beats_persistence" in manifest["headline_metrics"]
+    methods = (bundle_root / "methods_and_results.md").read_text(encoding="utf-8")
+    assert "Main Benchmark Readout" in methods
+    assert "Ablation Highlights" in methods
+
+
+def test_ensure_usable_context_dataset_shortens_context_when_episode_is_short(
+    tmp_path: Path,
+) -> None:
+    input_path = _write_benchmark_timeseries_csv(tmp_path)
+    prepared = prepare_timeseries_dataset(
+        input_path=input_path,
+        output_dir=tmp_path / "dataset",
+        entity_column="entity_id",
+        timestamp_column="event_ts",
+        observation_categorical_columns=["team", "segment"],
+        action_numeric_columns=["control"],
+        action_categorical_columns=["campaign"],
+        auxiliary_numeric_target_columns=["target_backlog"],
+        seed=7,
+    )
+
+    short_frame = (
+        prepared.frame.loc[prepared.frame["episode_id"] == "acct-0"]
+        .sort_values("step_idx")
+        .head(5)
+        .copy()
+    )
+    short_root = tmp_path / "short_dataset"
+    short_root.mkdir(parents=True, exist_ok=True)
+    short_frame.to_parquet(short_root / "steps.parquet", index=False)
+    (short_root / "schema.json").write_text(
+        prepared.schema.model_dump_json(indent=2),
+        encoding="utf-8",
+    )
+
+    adjusted_root = _ensure_usable_context_dataset(
+        load_processed_dataset(short_root),
+        tmp_path / "derived",
+    )
+    adjusted = load_processed_dataset(adjusted_root)
+
+    assert adjusted.schema.context_length == 4
 
 
 def _write_benchmark_timeseries_csv(tmp_path: Path) -> Path:

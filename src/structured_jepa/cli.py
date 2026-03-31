@@ -7,6 +7,7 @@ from typing import Literal, cast
 import typer
 
 from .api import (
+    ablation_timeseries,
     benchmark_timeseries,
     benchmark_vei_demo,
     evaluate_model,
@@ -15,6 +16,7 @@ from .api import (
     prepare_timeseries_dataset,
     prepare_vei_context_dataset,
     prepare_vei_runs_dataset,
+    publish_bundle,
     train_model,
     write_brief,
 )
@@ -231,6 +233,33 @@ def benchmark_vei_demo_command(
     typer.echo(f"VEI demo written to {output_root}")
 
 
+@app.command("ablation-timeseries")
+def ablation_timeseries_command(
+    dataset_root: str = typer.Option(..., "--dataset", help="Prepared timeseries dataset"),
+    output_dir: str = typer.Option(..., "--output", help="Ablation report directory"),
+    preset: str = typer.Option("full", "--preset", help="Ablation preset: quick or full"),
+    epochs: int = typer.Option(8, "--epochs", help="Epoch count"),
+    batch_size: int = typer.Option(16, "--batch-size", help="Batch size"),
+    lr: float = typer.Option(1e-3, "--lr", help="Learning rate"),
+    device: str = typer.Option("cpu", "--device", help="Training device"),
+) -> None:
+    normalized_preset = preset.strip().lower()
+    if normalized_preset not in {"quick", "full"}:
+        raise typer.BadParameter("preset must be one of: quick, full")
+    output_root = ablation_timeseries(
+        dataset_root=dataset_root,
+        output_dir=output_dir,
+        preset=normalized_preset,
+        train_config=TrainConfig(
+            epochs=epochs,
+            batch_size=batch_size,
+            lr=lr,
+            device=device,
+        ),
+    )
+    typer.echo(f"Ablation report written to {output_root}")
+
+
 @app.command("write-brief")
 def write_brief_command(
     benchmark_dir: str = typer.Option(..., "--benchmark-dir", help="Benchmark report directory"),
@@ -247,6 +276,53 @@ def write_brief_command(
         vei_demo_dir=vei_demo_dir or None,
     )
     typer.echo(f"Brief written to {output}")
+
+
+@app.command("publish-bundle")
+def publish_bundle_command(
+    benchmark_dataset_root: str = typer.Option(
+        ..., "--benchmark-dataset", help="Prepared timeseries dataset for publish artifacts"
+    ),
+    output_dir: str = typer.Option(..., "--output", help="Publish bundle directory"),
+    preset: str = typer.Option("full", "--preset", help="Ablation preset: quick or full"),
+    epochs: int = typer.Option(8, "--epochs", help="Epoch count for business benchmark runs"),
+    batch_size: int = typer.Option(16, "--batch-size", help="Batch size"),
+    lr: float = typer.Option(1e-3, "--lr", help="Learning rate"),
+    device: str = typer.Option("cpu", "--device", help="Training device"),
+    vei_dataset_root: str = typer.Option(
+        "",
+        "--vei-dataset",
+        help="Optional prepared VEI dataset for a demo bundle",
+    ),
+    vei_epochs: int = typer.Option(6, "--vei-epochs", help="Epoch count for VEI demo training"),
+    vei_batch_size: int = typer.Option(16, "--vei-batch-size", help="VEI batch size"),
+    vei_max_steps: int = typer.Option(5, "--vei-max-steps", help="VEI steps to summarize"),
+) -> None:
+    normalized_preset = preset.strip().lower()
+    if normalized_preset not in {"quick", "full"}:
+        raise typer.BadParameter("preset must be one of: quick, full")
+    output_root = publish_bundle(
+        benchmark_dataset_root=benchmark_dataset_root,
+        output_dir=output_dir,
+        ablation_preset=normalized_preset,
+        benchmark_train_config=TrainConfig(
+            epochs=epochs,
+            batch_size=batch_size,
+            lr=lr,
+            device=device,
+        ),
+        vei_dataset_root=vei_dataset_root or None,
+        vei_train_config=TrainConfig(
+            epochs=vei_epochs,
+            batch_size=vei_batch_size,
+            lr=lr,
+            device=device,
+        )
+        if vei_dataset_root
+        else None,
+        vei_max_steps=vei_max_steps,
+    )
+    typer.echo(f"Publish bundle written to {output_root}")
 
 
 def _split_csv_values(raw: str) -> list[str]:

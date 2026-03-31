@@ -1,4 +1,5 @@
 from .api import (
+    ablation_timeseries,
     benchmark_timeseries,
     benchmark_vei_demo,
     evaluate_model,
@@ -8,11 +9,13 @@ from .api import (
     prepare_timeseries_dataset,
     prepare_vei_context_dataset,
     prepare_vei_runs_dataset,
+    publish_bundle,
     train_model,
     write_brief,
 )
 
 __all__ = [
+    "ablation_timeseries",
     "benchmark_timeseries",
     "benchmark_vei_demo",
     "evaluate_model",
@@ -22,6 +25,7 @@ __all__ = [
     "prepare_timeseries_dataset",
     "prepare_vei_context_dataset",
     "prepare_vei_runs_dataset",
+    "publish_bundle",
     "train_model",
     "write_brief",
 ]

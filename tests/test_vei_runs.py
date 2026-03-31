@@ -291,6 +291,39 @@ def test_surface_feature_summary_extracts_panel_counts_and_priority() -> None:
     assert categorical["surface_primary_status"] == "critical"
 
 
+def test_surface_feature_summary_supports_service_ops_vertical() -> None:
+    numeric, categorical = summarize_snapshot_surface_features(
+        {
+            "components": {
+                "service_ops": {
+                    "work_orders": {
+                        "wo-1": {"status": "dispatched"},
+                        "wo-2": {"status": "pending"},
+                    },
+                    "appointments": {
+                        "appt-1": {"dispatch_status": "assigned"},
+                        "appt-2": {"dispatch_status": "pending"},
+                    },
+                    "billing_cases": {
+                        "bill-1": {"hold": True, "dispute_status": "open"},
+                    },
+                    "exceptions": {
+                        "exc-1": {"severity": "high", "status": "open"},
+                    },
+                }
+            }
+        }
+    )
+
+    assert numeric["surface_item_count__service_ops_work_orders"] == 2.0
+    assert numeric["surface_item_count__service_ops_appointments"] == 2.0
+    assert numeric["surface_signal__service_ops_assigned_appointments"] == 1.0
+    assert numeric["surface_signal__service_ops_holds_or_disputes"] == 1.0
+    assert numeric["surface_signal__service_ops_critical_exceptions"] == 1.0
+    assert categorical["surface_primary_panel"] == "vertical_service_ops"
+    assert categorical["surface_primary_status"] == "critical"
+
+
 def _write_playable_run_fixture(workspace_root: Path) -> str:
     run_id = "playable-run-1"
     run_root = workspace_root / "runs" / run_id

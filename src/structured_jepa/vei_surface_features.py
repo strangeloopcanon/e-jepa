@@ -193,11 +193,92 @@ def _summarize_vertical_panel(
     summary: dict[str, float],
     panels: list[tuple[str, str, int]],
 ) -> None:
+    if _summarize_service_ops_panel(components.get("service_ops"), summary, panels):
+        return
     if _summarize_property_panel(components.get("property_ops"), summary, panels):
         return
     if _summarize_campaign_panel(components.get("campaign_ops"), summary, panels):
         return
     _summarize_inventory_panel(components.get("inventory_ops"), summary, panels)
+
+
+def _summarize_service_ops_panel(
+    payload: object,
+    summary: dict[str, float],
+    panels: list[tuple[str, str, int]],
+) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    work_orders = _dict_records(payload, "work_orders")
+    appointments = _dict_records(payload, "appointments")
+    billing_cases = _dict_records(payload, "billing_cases")
+    exceptions = _dict_records(payload, "exceptions")
+    if not work_orders and not appointments and not billing_cases and not exceptions:
+        return False
+
+    assigned_appointments = 0
+    for appointment in appointments.values():
+        if not isinstance(appointment, dict):
+            continue
+        dispatch_status = normalize_token(
+            appointment.get("dispatch_status"),
+            default="pending",
+        ).lower()
+        if dispatch_status == "assigned":
+            assigned_appointments += 1
+
+    holds_or_disputes = 0
+    for billing_case in billing_cases.values():
+        if not isinstance(billing_case, dict):
+            continue
+        if bool(billing_case.get("hold")):
+            holds_or_disputes += 1
+            continue
+        dispute_status = normalize_token(
+            billing_case.get("dispute_status"),
+            default="clear",
+        ).lower()
+        if dispute_status not in {"clear", "resolved", "closed"}:
+            holds_or_disputes += 1
+
+    open_exceptions = 0
+    critical_exceptions = 0
+    for issue in exceptions.values():
+        if not isinstance(issue, dict):
+            continue
+        status = normalize_token(issue.get("status"), default="open").lower()
+        if status not in _RESOLVED_STATUSES:
+            open_exceptions += 1
+        severity = normalize_token(issue.get("severity"), default="medium").lower()
+        if severity in {"critical", "high"}:
+            critical_exceptions += 1
+
+    summary["surface_item_count__service_ops_work_orders"] = float(len(work_orders))
+    summary["surface_item_count__service_ops_appointments"] = float(len(appointments))
+    summary["surface_item_count__service_ops_billing_cases"] = float(len(billing_cases))
+    summary["surface_item_count__service_ops_exceptions"] = float(len(exceptions))
+    summary["surface_signal__service_ops_assigned_appointments"] = float(assigned_appointments)
+    summary["surface_signal__service_ops_holds_or_disputes"] = float(holds_or_disputes)
+    summary["surface_signal__service_ops_open_exceptions"] = float(open_exceptions)
+    summary["surface_signal__service_ops_critical_exceptions"] = float(critical_exceptions)
+
+    item_count = len(work_orders) + len(appointments) + len(billing_cases) + len(exceptions)
+    if critical_exceptions > 0 or holds_or_disputes > 0:
+        status = "critical"
+    elif open_exceptions > 0:
+        status = "warning"
+    elif len(appointments) > 0 and assigned_appointments < len(appointments):
+        status = "warning"
+    else:
+        status = "ok"
+    _record_panel(
+        summary,
+        panels,
+        panel_name="vertical_service_ops",
+        status=status,
+        item_count=item_count,
+    )
+    return True
 
 
 def _summarize_property_panel(

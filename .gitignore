@@ -1,8 +1,4 @@
-
-# Beads / Dolt files (added by bd init)
-.dolt/
-*.db
-.beads-credential-key
+# Local tool state
 .beads/
 
 # Python environment and caches

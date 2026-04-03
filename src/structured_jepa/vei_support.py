@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import json
 from collections import Counter
 from pathlib import Path
@@ -161,13 +162,16 @@ def _load_run_timeline_from_vei_api(
     workspace_root: Path,
     run_id: str,
 ) -> list[dict[str, Any]] | None:
-    try:
-        from vei.run.api import load_run_events_for_run
-    except Exception:
+    load_run_events = _import_vei_callable(
+        ("vei.run.api", "load_run_events_for_run"),
+        ("vei.sdk", "load_run_events_entry"),
+        ("vei.sdk.api", "load_run_events_entry"),
+    )
+    if load_run_events is None:
         return None
 
     try:
-        events = load_run_events_for_run(workspace_root, run_id)
+        events = load_run_events(workspace_root, run_id)
     except Exception:
         return None
     return [_as_json_dict(event) for event in events]
@@ -177,10 +181,16 @@ def _load_run_snapshots_from_vei_api(
     workspace_root: Path,
     run_id: str,
 ) -> list[dict[str, Any]] | None:
-    try:
-        from vei.run.api import list_run_snapshots, load_run_snapshot_payload
-    except Exception:
+    list_run_snapshots = _import_vei_callable(
+        ("vei.run.api", "list_run_snapshots"),
+        ("vei.sdk", "list_run_snapshots_entry"),
+        ("vei.sdk.api", "list_run_snapshots_entry"),
+    )
+    if list_run_snapshots is None:
         return None
+    load_run_snapshot_payload = _import_vei_callable(
+        ("vei.run.api", "load_run_snapshot_payload"),
+    )
 
     try:
         refs = list_run_snapshots(workspace_root, run_id)
@@ -192,7 +202,12 @@ def _load_run_snapshots_from_vei_api(
     snapshots: list[dict[str, Any]] = []
     for ref in refs:
         try:
-            payload = load_run_snapshot_payload(workspace_root, run_id, int(ref.snapshot_id))
+            payload = _load_snapshot_payload_from_ref(
+                workspace_root=workspace_root,
+                run_id=run_id,
+                ref=ref,
+                load_run_snapshot_payload=load_run_snapshot_payload,
+            )
         except Exception:
             return None
         if not isinstance(payload, dict):
@@ -212,9 +227,10 @@ def _load_run_surface_state_from_vei_api(
     workspace_root: Path,
     run_id: str,
 ) -> object | None:
-    try:
-        from vei.run.api import get_run_surface_state
-    except Exception:
+    get_run_surface_state = _import_vei_callable(
+        ("vei.run.api", "get_run_surface_state"),
+    )
+    if get_run_surface_state is None:
         return None
 
     try:
@@ -230,9 +246,12 @@ def _load_snapshot_diff_from_vei_api(
     snapshot_from: int,
     snapshot_to: int,
 ) -> dict[str, Any] | None:
-    try:
-        from vei.run.api import diff_run_snapshots
-    except Exception:
+    diff_run_snapshots = _import_vei_callable(
+        ("vei.run.api", "diff_run_snapshots"),
+        ("vei.sdk", "diff_run_snapshots_entry"),
+        ("vei.sdk.api", "diff_run_snapshots_entry"),
+    )
+    if diff_run_snapshots is None:
         return None
 
     try:
@@ -242,9 +261,53 @@ def _load_snapshot_diff_from_vei_api(
             int(snapshot_from),
             int(snapshot_to),
         )
+    except TypeError:
+        try:
+            diff_payload = diff_run_snapshots(
+                workspace_root,
+                run_id,
+                snapshot_from=int(snapshot_from),
+                snapshot_to=int(snapshot_to),
+            )
+        except Exception:
+            return None
     except Exception:
         return None
     return diff_payload if isinstance(diff_payload, dict) else None
+
+
+def _import_vei_callable(*candidates: tuple[str, str]) -> Any | None:
+    for module_name, attribute_name in candidates:
+        try:
+            module = importlib.import_module(module_name)
+            candidate = getattr(module, attribute_name)
+        except (ImportError, AttributeError):
+            continue
+        if callable(candidate):
+            return candidate
+    return None
+
+
+def _load_snapshot_payload_from_ref(
+    *,
+    workspace_root: Path,
+    run_id: str,
+    ref: object,
+    load_run_snapshot_payload: Any | None,
+) -> dict[str, Any]:
+    snapshot_id = int(ref.snapshot_id)  # type: ignore[attr-defined]
+    if callable(load_run_snapshot_payload):
+        payload = load_run_snapshot_payload(workspace_root, run_id, snapshot_id)
+        return payload if isinstance(payload, dict) else {}
+
+    ref_path = getattr(ref, "path", None)
+    if ref_path is None:
+        raise ValueError("snapshot ref path not available")
+    snapshot_path = Path(str(ref_path))
+    if not snapshot_path.is_absolute():
+        snapshot_path = workspace_root / snapshot_path
+    payload = json.loads(snapshot_path.read_text(encoding="utf-8"))
+    return payload if isinstance(payload, dict) else {}
 
 
 def _load_events_from_path(path: Path) -> list[dict[str, Any]]:
